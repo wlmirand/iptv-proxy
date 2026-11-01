@@ -396,6 +396,7 @@ inputs:
     base-url: http://b.example
     user: v
     password: q
+    base-id: 200000000
 output:
   dedupe: guide-id
   formats: [xtream, m3u, xmltv, m3u]
@@ -410,7 +411,15 @@ output:
 	if conf.XtreamName != "Brasil" || conf.XtreamBaseURL != "http://a.example" || conf.XtreamUser != "u" || conf.XtreamPassword != "p" || conf.XtreamMaxConnections != 2 {
 		t.Errorf("first input: %q %q %q %q %d", conf.XtreamName, conf.XtreamBaseURL, conf.XtreamUser, conf.XtreamPassword, conf.XtreamMaxConnections)
 	}
-	if len(conf.Sources) != 1 || conf.Sources[0] != (config.Source{Name: "Portugal", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
+	if len(conf.Sources) != 1 {
+		t.Fatalf("sources: %+v", conf.Sources)
+	}
+	got := conf.Sources[0]
+	if got.BaseID == nil || *got.BaseID != 200000000 || conf.XtreamBaseID != nil {
+		t.Errorf("base ids: %v, %v", got.BaseID, conf.XtreamBaseID)
+	}
+	got.BaseID = nil
+	if got != (config.Source{Name: "Portugal", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
 		t.Errorf("sources: %+v", conf.Sources)
 	}
 	if conf.Output == nil || len(conf.Output.Formats) != 3 || !conf.Output.Has("m3u") {
@@ -442,7 +451,8 @@ func TestInputsAndOutputRefused(t *testing.T) {
 		"incomplete account":    {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
 		"the same name twice":   {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},
 		"not yet: individual":   {one + "    individual: true\n", nil, "not supported yet"},
-		"not yet: base-id":      {one + "    base-id: 0\n", nil, "not supported yet"},
+		"base-id alone":         {one + "    base-id: 0\n", nil, "several inputs"},
+		"negative base-id":      {"output:\n  dedupe: guide-id\n" + two + "    base-id: -1\n", nil, "negative"},
 		"not yet: prefix":       {one + "    category-prefix: BR\n", nil, "not supported yet"},
 		"max alone":             {one + "    max-connections: 1\n", nil, "several inputs"},
 		"several need a dedupe": {two, nil, "output.dedupe"},

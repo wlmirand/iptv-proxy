@@ -198,14 +198,18 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 			return fmt.Errorf("%s: type %q is not supported yet: only %s is", name, in.Type, inputXtream)
 		case in.BaseURL == "" || in.User == "" || in.Password == "":
 			return fmt.Errorf("%s: an xtream input needs base-url, user and password", name)
-		case in.Path != "" || in.Individual || in.BaseID != nil || in.CategoryPrefix != "":
-			return fmt.Errorf("%s: path, individual, base-id and category-prefix are not supported yet", name)
+		case in.Path != "" || in.Individual || in.CategoryPrefix != "":
+			return fmt.Errorf("%s: path, individual and category-prefix are not supported yet", name)
 		case len(listed) == 1 && in.MaxConnections != 0:
 			return fmt.Errorf("%s: max-connections only counts among several inputs", name)
+		case len(listed) == 1 && in.BaseID != nil:
+			return fmt.Errorf("%s: base-id only counts among several inputs", name)
+		case in.BaseID != nil && *in.BaseID < 0:
+			return fmt.Errorf("%s: base-id cannot be negative", name)
 		}
 
 		if i > 0 {
-			sources = append(sources, config.Source{Name: name, XtreamBaseURL: in.BaseURL, XtreamUser: in.User, XtreamPassword: in.Password, MaxConnections: in.MaxConnections})
+			sources = append(sources, config.Source{Name: name, XtreamBaseURL: in.BaseURL, XtreamUser: in.User, XtreamPassword: in.Password, MaxConnections: in.MaxConnections, BaseID: in.BaseID})
 			continue
 		}
 		// The first input is the proxy's Xtream account.
@@ -214,6 +218,7 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 		conf.XtreamUser = config.CredentialString(in.User)
 		conf.XtreamPassword = config.CredentialString(in.Password)
 		conf.XtreamMaxConnections = in.MaxConnections
+		conf.XtreamBaseID = in.BaseID
 	}
 	conf.Sources = sources
 	return nil

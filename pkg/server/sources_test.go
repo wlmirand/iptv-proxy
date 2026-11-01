@@ -239,18 +239,62 @@ func TestSourceLimit(t *testing.T) {
 
 func TestShownIDs(t *testing.T) {
 	for _, c := range []struct {
-		src      int
+		base     int64
 		id, want string
-	}{{0, "12", "12"}, {1, "12", "100000012"}, {2, "0", "200000000"}, {1, "100000000", "100000000"}, {1, "-5", "-5"}, {1, "abc", "abc"}} {
-		if got := shownID(c.src, c.id); got != c.want {
-			t.Errorf("shownID(%d, %s) = %s, want %s", c.src, c.id, got, c.want)
+	}{{0, "12", "12"}, {sourceIDs, "12", "100000012"}, {2 * sourceIDs, "0", "200000000"}, {sourceIDs, "100000000", "100000000"}, {sourceIDs, "-5", "-5"}, {sourceIDs, "abc", "abc"}, {500, "7", "507"}} {
+		if got := shownID(c.base, c.id); got != c.want {
+			t.Errorf("shownID(%d, %s) = %s, want %s", c.base, c.id, got, c.want)
 		}
 	}
-	c := &Config{sources: []*source{{index: 0}, {index: 1}}}
+	c := &Config{sources: []*source{{index: 0}, {index: 1, base: sourceIDs}}}
 	for id, want := range map[string]string{"12": "0/12", "100000012": "1/12", "200000012": "0/200000012", "x": "0/x"} {
 		src, own := c.sourceOf(id)
 		if got := strconv.Itoa(src.index) + "/" + own; got != want {
 			t.Errorf("sourceOf(%s) = %s, want %s", id, got, want)
+		}
+	}
+}
+
+func TestSourcesBaseIDs(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	five, big := 500_000_000, 300_000_000
+
+	// the ids of the second source start where the configuration says
+	base := proxy(t, p, func(c *config.ProxyConfig) {
+		withSource(q)(c)
+		c.Sources[0].BaseID = &five
+	})
+	if got := ids(listOf(t, base, "get_vod_streams", "stream_id")); !strings.Contains(got, "500000012") || strings.Contains(got, "100000012") {
+		t.Errorf("movies: %s", got)
+	}
+	if resp, body := get(t, base+"/movie/me/secret/500000012.mkv"); resp.StatusCode >= 300 || body != "second:12.mkv" {
+		t.Errorf("a stream at the base-id: status %d, %q", resp.StatusCode, body)
+	}
+
+	// the first source may have a base too; the others keep following their position
+	base = proxy(t, p, func(c *config.ProxyConfig) {
+		withSource(q)(c)
+		c.XtreamBaseID = &big
+	})
+	if got := ids(listOf(t, base, "get_vod_streams", "stream_id")); !strings.Contains(got, "300000012") || !strings.Contains(got, "100000012") {
+		t.Errorf("movies: %s", got)
+	}
+}
+
+func TestSourcesBaseIDsOverlap(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	near, negative := 99_999_999, -1
+	for name, mutate := range map[string]func(*config.ProxyConfig){
+		"too close": func(c *config.ProxyConfig) { withSource(q)(c); c.Sources[0].BaseID = &near },
+		"negative":  func(c *config.ProxyConfig) { withSource(q)(c); c.Sources[0].BaseID = &negative },
+	} {
+		conf := &config.ProxyConfig{
+			HostConfig: &config.HostConfiguration{Hostname: "proxy.example", Port: 8080}, XtreamBaseURL: p.URL,
+			XtreamUser: xUser, XtreamPassword: xPass, User: user, Password: pass, M3UFileName: "iptv.m3u", M3UCacheExpiration: 1,
+		}
+		mutate(conf)
+		if _, err := NewServer(conf); err == nil {
+			t.Errorf("%s: the ranges are accepted", name)
 		}
 	}
 }
@@ -326,7 +370,7 @@ func TestShownDetails(t *testing.T) {
 		{`{"episodes":[[{"id":7}]]}`, `{"episodes":[[{"id":200000007}]]}`},
 		{`not json`, `not json`},
 	} {
-		if got := string(shownDetails([]byte(c.answer), 2)); got != c.want {
+		if got := string(shownDetails([]byte(c.answer), 2*sourceIDs)); got != c.want {
 			t.Errorf("%s: %s, want %s", c.answer, got, c.want)
 		}
 	}

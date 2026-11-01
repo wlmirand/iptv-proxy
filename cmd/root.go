@@ -207,7 +207,7 @@ func configSources() ([]config.Source, error) {
 	}
 	sources := make([]config.Source, 0, len(listed))
 	for _, s := range listed {
-		sources = append(sources, config.Source(s))
+		sources = append(sources, config.Source{Name: s.Name, XtreamBaseURL: s.XtreamBaseURL, XtreamUser: s.XtreamUser, XtreamPassword: s.XtreamPassword, MaxConnections: s.MaxConnections})
 	}
 	return sources, nil
 }

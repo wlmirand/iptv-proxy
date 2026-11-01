@@ -41,9 +41,10 @@ import (
 )
 
 // Several sources (Xtream accounts, of one provider or several) are served
-// as one catalogue. Each source keeps its ids in a range of its own: source
-// n shows id as n × sourceIDs + id, and the first source keeps its ids, so
-// that adding a source changes nothing for what clients already know.
+// as one catalogue. Each source keeps its ids in a range of its own: a source
+// shows id as its base + id. The base is the one the configuration gives it,
+// else n × sourceIDs for the source n, so that the first source keeps its
+// ids and adding a source changes nothing for what clients already know.
 // Categories of the same name are one. A live channel several sources have
 // (the same guide id) is shown once, from the first of them; the others are
 // its fallbacks, used when it fails or its source has no connection left.
@@ -53,8 +54,12 @@ import (
 const sourceIDs = 100_000_000
 
 type source struct {
-	index   int
-	name    string
+	index int
+	name  string
+	// base is where the source's range of ids starts; the configuration may
+	// give it (baseID), else it follows the source's position.
+	base    int64
+	baseID  *int
 	account xtream.Account
 	// max is the configured limit of streams at once; 0 asks the provider.
 	max int
@@ -137,7 +142,7 @@ func (c *Config) setupSources() error {
 		if name == "" {
 			name = "xtream"
 		}
-		c.sources = append(c.sources, &source{name: name, account: c.providerAccount(), max: c.XtreamMaxConnections})
+		c.sources = append(c.sources, &source{name: name, account: c.providerAccount(), max: c.XtreamMaxConnections, baseID: c.XtreamBaseID})
 	}
 	for i, s := range c.Sources {
 		name := s.Name
@@ -151,10 +156,18 @@ func (c *Config) setupSources() error {
 			name:    name,
 			account: xtream.Account{BaseURL: s.XtreamBaseURL, User: s.XtreamUser, Password: s.XtreamPassword},
 			max:     s.MaxConnections,
+			baseID:  s.BaseID,
 		})
 	}
 	for i, s := range c.sources {
 		s.index = i
+		s.base = int64(i) * sourceIDs
+		if s.baseID != nil {
+			s.base = int64(*s.baseID)
+		}
+	}
+	if err := c.checkBases(); err != nil {
+		return err
 	}
 	// The first source is the proxy's Xtream account.
 	first := c.sources[0].account
@@ -163,30 +176,52 @@ func (c *Config) setupSources() error {
 	return nil
 }
 
+// checkBases refuses ranges of ids that overlap: an id shown would belong to
+// two sources.
+func (c *Config) checkBases() error {
+	for i, a := range c.sources {
+		if a.base < 0 {
+			return fmt.Errorf("%s: base-id cannot be negative", a.name)
+		}
+		for _, b := range c.sources[:i] {
+			if d := a.base - b.base; d > -sourceIDs && d < sourceIDs {
+				return fmt.Errorf("%s and %s: base-id %d and %d are less than %d apart, their ids would overlap", b.name, a.name, b.base, a.base, sourceIDs)
+			}
+		}
+	}
+	return nil
+}
+
 // merged tells whether several sources are served as one.
 func (c *Config) merged() bool {
 	return len(c.sources) > 1
 }
 
-// shownID is the id a source's entry is shown under.
-func shownID(src int, id string) string {
-	if src == 0 {
+// shownID is the id an entry of a source is shown under, given the source's
+// base.
+func shownID(base int64, id string) string {
+	if base == 0 {
 		return id
 	}
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil || n < 0 || n >= sourceIDs {
 		return id // not an id the proxy can place: left as it is
 	}
-	return strconv.FormatInt(int64(src)*sourceIDs+n, 10)
+	return strconv.FormatInt(base+n, 10)
 }
 
 // sourceOf returns the source of an id shown, and its id there.
 func (c *Config) sourceOf(id string) (*source, string) {
 	n, err := strconv.ParseInt(id, 10, 64)
-	if err != nil || n < sourceIDs || n/sourceIDs >= int64(len(c.sources)) {
+	if err != nil {
 		return c.sources[0], id
 	}
-	return c.sources[n/sourceIDs], strconv.FormatInt(n%sourceIDs, 10)
+	for _, src := range c.sources {
+		if n >= src.base && n < src.base+sourceIDs {
+			return src, strconv.FormatInt(n-src.base, 10)
+		}
+	}
+	return c.sources[0], id
 }
 
 // fromEach asks every source the same API action, at once. A source that
@@ -258,7 +293,7 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 				ids[sourceKey(i, id)] = first.shown
 				return nil
 			}
-			shown := shownID(i, id)
+			shown := shownID(c.sources[i].base, id)
 			if _, ok := byName[name]; !ok {
 				byName[name] = firstOf{i, shown}
 			}
@@ -330,7 +365,7 @@ func (c *Config) mergedList(ctx *gin.Context, cat catalogue, params url.Values) 
 		if shown, ok := categories[sourceKey(src, id)]; ok {
 			return shown
 		}
-		return shownID(src, id)
+		return shownID(c.sources[src].base, id)
 	}
 	var out listWriter
 	for i, body := range bodies {
@@ -339,7 +374,7 @@ func (c *Config) mergedList(ctx *gin.Context, cat catalogue, params url.Values) 
 		}
 		err := xtream.EachEntry(body, func(entry map[string]any, raw []byte) error {
 			id := xtream.Text(entry[cat.id])
-			shown := shownID(i, id)
+			shown := shownID(c.sources[i].base, id)
 			if guide := xtream.Text(entry["epg_channel_id"]); cat.live && guide != "" {
 				first := byGuide[guide]
 				switch {
@@ -457,14 +492,14 @@ func (c *Config) mergedAPI(ctx *gin.Context, params url.Values) (int, http.Heade
 		body = xtream.Sanitize(body, src.account, c.proxyAccount(u.(*proxyUser)))
 	}
 	if status == http.StatusOK {
-		body = shownDetails(body, src.index)
+		body = shownDetails(body, src.base)
 	}
 	return status, header, body, false, nil
 }
 
 // shownDetails gives the ids of an entry's details (a movie's stream, a
 // series' episodes) as shown.
-func shownDetails(body []byte, src int) []byte {
+func shownDetails(body []byte, base int64) []byte {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	var answer map[string]any
@@ -473,7 +508,7 @@ func shownDetails(body []byte, src int) []byte {
 	}
 	shown := func(entry map[string]any, field string) {
 		if v, ok := entry[field]; ok {
-			entry[field] = xtream.SameType(v, shownID(src, xtream.Text(v)))
+			entry[field] = xtream.SameType(v, shownID(base, xtream.Text(v)))
 		}
 	}
 	if movie, ok := answer["movie_data"].(map[string]any); ok {

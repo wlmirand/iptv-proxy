@@ -62,6 +62,9 @@ type Source struct {
 	// MaxConnections is how many streams the proxy opens at once on the
 	// account; 0 asks the provider.
 	MaxConnections int
+	// BaseID is where the source's range of ids starts, in the catalogue
+	// the sources make together; nil follows the source's position.
+	BaseID *int
 }
 
 // What the proxy delivers to its clients.
@@ -106,6 +109,7 @@ type ProxyConfig struct {
 	// of several sources.
 	XtreamName           string
 	XtreamMaxConnections int
+	XtreamBaseID         *int
 	XtreamGenerateApiGet bool
 	// XtreamApiGetMovies adds the provider's movies to the playlist generated
 	// from its API. Off by default: a catalogue of tens of thousands of
