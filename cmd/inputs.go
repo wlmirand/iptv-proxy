@@ -123,8 +123,13 @@ func applyOutput(conf *config.ProxyConfig, out *fileOutput) error {
 		}
 	}
 
+	// An output section that does not list the formats delivers them all.
+	listed := out.Formats
+	if listed == nil {
+		listed = []string{config.OutputXtream, config.OutputM3U, config.OutputXMLTV}
+	}
 	formats := []string{}
-	for _, f := range out.Formats {
+	for _, f := range listed {
 		switch f {
 		case config.OutputXtream, config.OutputM3U, config.OutputXMLTV:
 			if !slices.Contains(formats, f) {

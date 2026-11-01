@@ -1,0 +1,106 @@
+# Example configuration file of iptv-proxy.
+#
+# Copy it, edit it, and give it to the proxy:
+#
+#   docker run -d --name iptv-proxy -p 8080:8080 -p 5004:5004 \
+#     -v "$PWD/iptv-proxy.yaml:/config/iptv-proxy.yaml:ro" \
+#     -e IPTV_PROXY_CONFIG=/config/iptv-proxy.yaml \
+#     pierro777/iptv-proxy:latest
+#
+#   or, with the binary: iptv-proxy --iptv-proxy-config iptv-proxy.yaml
+#
+# Every option of the command line can be written here under its flag's name
+# (hostname, port, https...). Do not put --m3u-url, --xtream-* nor
+# --xtream-passthrough here or in the environment when you list inputs: the
+# inputs replace them. See "Several inputs" in the README.
+
+# ---------------------------------------------------------------------------
+# The proxy
+# ---------------------------------------------------------------------------
+
+# Name or IP your players reach the proxy at. It is written in every address
+# the proxy gives out.
+hostname: 192.168.1.10
+port: 8080
+
+# ---------------------------------------------------------------------------
+# Who may use the proxy
+# ---------------------------------------------------------------------------
+
+# Everyone sees the same channels; a user has a login, a limit of streams at
+# once, and filters of their own, applied after the proxy's.
+users:
+  - name: family
+    password: choose-a-password
+    max-connections: 2
+  - name: kids
+    password: another-password
+    max-connections: 1
+    group-regex: "(?i)kids|cartoon"
+  - name: grandma
+    password: a-third-one
+    group-regex: "^BR "
+    channel-exclude-regex: "(?i)adult"
+
+# ---------------------------------------------------------------------------
+# Inputs: what the proxy reads
+# ---------------------------------------------------------------------------
+
+inputs:
+  # An Xtream Codes account.
+  - name: Brazil
+    type: xtream
+    base-url: http://provider-one.example:8080
+    user: xtream_user
+    password: xtream_password
+    max-connections: 2        # the account's own limit by default
+    base-id: 0                # where this input's ids start (see the README)
+    category-prefix: BR       # "News" is shown as "BR | News"
+    individual: true          # also served alone, at /brazil/
+    path: brazil
+
+  # An M3U playlist: an address, or a file mounted in the container.
+  - name: Portugal
+    type: m3u
+    url: http://provider-two.example/playlist.m3u
+    # url: /iptv/portugal.m3u
+    xmltv-url: http://provider-two.example/guide.xml   # optional: else the
+                                                       # guide the playlist names
+    base-id: 100000000
+    category-prefix: PT
+    individual: true
+    path: portugal
+
+# ---------------------------------------------------------------------------
+# Output: what the proxy delivers
+# ---------------------------------------------------------------------------
+
+output:
+  # What is delivered. Leave the line out to deliver all of them.
+  #   xtream: the Xtream API (player_api.php, get.php) for IPTV Smarters,
+  #           TiviMate...
+  #   m3u:    the playlist (iptv.m3u)
+  #   xmltv:  the guide (xmltv.php)
+  formats: [xtream, m3u, xmltv]
+
+  # The combined catalogue, on the proxy's address: http://192.168.1.10:8080
+  # Set it to false to serve the inputs on their own only (/brazil/...,
+  # /portugal/...), which needs at least one individual input.
+  combined: true
+
+  # A live channel several inputs have (the same guide id):
+  #   none:     shown from each input (the default)
+  #   guide-id: shown once, from the first input; the others are its fallbacks
+  dedupe: none
+
+  # Between a category prefix and the category, written as is.
+  category-separator: " | "
+
+  # HDHomeRun tuners for Plex, Emby, Jellyfin, Channels DVR. A tuner has no
+  # login: keep its port on your local network. Each one is a port.
+  hdhomerun:
+    - port: 5004              # every input
+      tuners: 2               # channels a media server may play at once
+      group-regex: "^(BR|PT) "
+    - port: 5005
+      sources: [Portugal]     # one input alone

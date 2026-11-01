@@ -205,7 +205,7 @@ wins over the variable, and the variable over the file.
 | `--channel-regex` | `CHANNEL_REGEX` | | Keep only the live channels whose name matches this regular expression. |
 | `--group-exclude-regex` | `GROUP_EXCLUDE_REGEX` | | Leave out the live channels whose group matches this regular expression. |
 | `--channel-exclude-regex` | `CHANNEL_EXCLUDE_REGEX` | | Leave out the live channels whose name matches this regular expression. |
-| `--iptv-proxy-config` | `IPTV_PROXY_CONFIG` | `.iptv-proxy.yaml` in the home or current directory | YAML file holding the same options, named as the flags (`m3u-url: ...`), the [users](#several-users) and the [sources](#several-sources). |
+| `--iptv-proxy-config` | `IPTV_PROXY_CONFIG` | `.iptv-proxy.yaml` in the home or current directory | YAML file holding the same options, named as the flags (`m3u-url: ...`), the [users](#several-users), the [sources](#several-sources), and the [inputs and output](#several-inputs-one-catalogue-or-one-each). |
 | `--version` | | | Prints the version and exits. |
 
 Good to know:
@@ -417,7 +417,176 @@ docker run -d --name iptv-proxy -p 8080:8080 \
   it, and the proxy says so at startup. `--user` and `--password` are not
   used.
 
+## Several inputs, one catalogue or one each
+
+Playlists and accounts of different kinds, of one provider or many, can be
+served together. List them under `inputs` in the configuration file, and say
+what the proxy delivers under `output`. They are not options of the command
+line: they live in the file (`--iptv-proxy-config`, or `IPTV_PROXY_CONFIG` in
+Docker, see [Several users](#several-users)).
+
+```yaml
+# /config/iptv-proxy.yaml
+inputs:
+  - name: Brazil
+    type: xtream
+    base-url: http://provider-one.example:8080
+    user: xtream_user
+    password: xtream_password
+    category-prefix: BR
+    individual: true          # also served alone, at /brazil/
+    path: brazil
+  - name: Portugal
+    type: m3u
+    url: http://provider-two.example/playlist.m3u   # or a file in the container
+    xmltv-url: http://provider-two.example/guide.xml  # optional
+    category-prefix: PT
+    individual: true
+    path: portugal
+
+output:
+  formats: [xtream, m3u, xmltv]
+  dedupe: none                # or guide-id
+  category-separator: " | "   # the default
+  hdhomerun:
+    - port: 5004              # every input
+    - port: 5005
+      sources: [Portugal]     # one input alone
+```
+
+A commented file with every option is in the repository:
+[`iptv-proxy.example.yaml`](iptv-proxy.example.yaml). Copy it and edit it.
+
+Players then use the proxy's address as always, with the combined catalogue
+on `http://192.168.1.10:8080`, and `http://192.168.1.10:8080/portugal` for
+the playlist alone.
+
+### Inputs
+
+| Field | What it does |
+|---|---|
+| `name` | Name in logs, on the status page and in `output.hdhomerun`. Each name is used once. |
+| `type` | `xtream` or `m3u`. Required. |
+| `base-url`, `user`, `password` | The Xtream Codes account (`xtream` inputs). |
+| `url` | The playlist: an `http(s)` address or a local file (`m3u` inputs). |
+| `xmltv-url` | The guide of an `m3u` input, when its playlist does not name one (`url-tvg`). |
+| `max-connections` | Streams the proxy opens at once on the input; the account's own limit by default (none known for a playlist). |
+| `base-id` | Where the input's ids start in the combined catalogue. See [Ids](#ids). |
+| `category-prefix` | Put in front of the input's categories in the combined catalogue. See [Categories](#categories). |
+| `individual`, `path` | Also serve the input alone at `/<path>/` (`individual: true` needs a `path`). See [An input on its own](#an-input-on-its-own). |
+
+With a **single input**, nothing is rewritten and the answers are the
+provider's own: `base-id`, `category-prefix`, `max-connections` and
+`individual` mean nothing then, and the proxy refuses them.
+
+Inputs replace `--m3u-url`, `--xtream-*`, `--xtream-passthrough` and
+`sources`: they do not go together, and the proxy says so at startup.
+
+### Playlists as inputs
+
+An `m3u` input is read as if it were an Xtream account, so that it has the
+same catalogue, ids, guide and connection limits as one, and every output
+(Xtream API, playlist, tuner) can come from it.
+
+- **Live channels only.** Tracks whose address is a file (a movie, a song)
+  are left out, and a playlist has no movies or series. A track repeated is
+  one channel.
+- A track's **category** is its `group-title`, its guide id its `tvg-id`.
+- A channel's **id** comes from the track's address, so it stays when the
+  playlist changes, wherever the track moves. If two addresses give the same
+  id (it happens in playlists of tens of thousands of tracks), the first in
+  alphabetical order of address keeps it and the other takes the next one
+  free: only tracks that collide can be affected by a change of the
+  playlist.
+- The playlist is read again after `--m3u-cache-expiration` hours. One that
+  cannot be read is kept, and asked again in five minutes.
+- The guide is the `xmltv-url`, else the one the playlist names. A guide
+  that cannot be read is left out of the combined guide.
+- The stream is the track's address, which only the proxy follows: players
+  never see it.
+
+### Ids
+
+In the combined catalogue every input has a range of 100,000,000 ids, and an
+entry is shown as `base-id` + its id. Without `base-id`, the input at
+position *n* in the list starts at *n* × 100,000,000, so the first input
+keeps its ids. Players set up before see the same channels under the same
+numbers.
+
+Give a `base-id` to an input to keep its ids whatever its position: adding or
+reordering inputs then changes nothing. Bases less than 100,000,000 apart,
+or negative, are refused at startup.
+
+### Categories
+
+By default, categories of the same name at different inputs are one. A
+`category-prefix` keeps them apart: the category is shown as the prefix, the
+separator and the category.
+
+| Input's category | `category-prefix: PT` | Shown |
+|---|---|---|
+| `News` | yes | `PT \| News` |
+| *(none: a playlist's track without a group)* | yes | `PT` |
+| `News` | no | `News` |
+
+The separator is `output.category-separator`, `" | "` by default, written as
+is (quote it to keep its spaces). The prefix is trimmed. Two inputs with the
+same prefix share their categories. An Xtream account's channels all have a
+category already: only a playlist's tracks without a group get the one of the
+prefix alone.
+
+[Filters](#filtering-channels) match the names as they are shown: with a
+prefix, `^PT \|` keeps an input's categories.
+
+### An input on its own
+
+With `individual: true` and a `path`, an input is also served alone,
+under its path: `/portugal/iptv.m3u`, `/portugal/player_api.php`,
+`/portugal/xmltv.php` and its streams at `/portugal/live/<user>/<password>/<id>`.
+
+- It shows the input's channels **as they are**: its own ids and categories,
+  no prefix, no range.
+- It is the same proxy: the same users and passwords, the same filters, and the
+  connections are shared with the combined catalogue and with the other
+  views. A stream watched in one is the same one in the other, and the limit of
+  streams of an input or of a user holds for all of them.
+- A view only plays its own input's channels.
+- The path is made of letters, digits and `- _ . ~`. It cannot be the name of
+  a user, the playlist's name, one of the proxy's own paths (`live`, `hls`,
+  `status`, `get.php`...) or another view's path.
+- `output.combined: false` leaves the combined catalogue out and serves the
+  views only.
+
+### Output
+
+Without an `output` section, the proxy delivers everything its inputs allow,
+as before. With one, only what it lists exists: a format left out has no
+routes at all.
+
+| Setting | What it does |
+|---|---|
+| `formats` | What is delivered: `xtream` (the Xtream API, `get.php`), `m3u` (the playlist), `xmltv` (the guide). All of them when it is not there; `[]` delivers none (a tuner alone). The streams exist if `xtream` or `m3u` is there. |
+| `combined` | `true` by default. `false` serves the views only, and needs one. |
+| `dedupe` | `none` by default: a live channel several inputs have is shown from each. `guide-id` shows it once, from the first input, and keeps the others as its fallbacks (the guide id is `epg_channel_id`, or `tvg-id` in a playlist). |
+| `category-separator` | Between a category prefix and the category. |
+| `hdhomerun` | The HDHomeRun tuners: see below. |
+
+An `xtream` output needs an Xtream account or a playlist among the inputs
+(a playlist is served as an Xtream account, with live channels only).
+
+A tuner is a port. Each entry has its `port`, its number of `tuners`,
+its filters (`group-regex`, `channel-regex`, `group-exclude-regex`,
+`channel-exclude-regex`) and optionally `sources: [name]` for one input alone;
+without it, it serves every input. Ports differ from each other and from the
+proxy's. `HDHOMERUN_*` options and `output.hdhomerun` do not go together.
+See [Plex and other media servers](#plex-and-other-media-servers).
+
 ## Several sources
+
+This is the first way to serve several accounts, and it keeps working. To
+mix playlists and accounts, to choose what is delivered, or to serve each
+input alone, see [Several inputs](#several-inputs-one-catalogue-or-one-each):
+`sources` and `inputs` do not go together.
 
 A second account, at the same provider or another, can back up the first:
 list it under `sources` in the configuration file. The proxy then serves
@@ -513,6 +682,12 @@ instead: the tuner's port then needs no publishing at all.
   guide gives such logos through that address, where the Plex apps load them
   and the proxy fetches them. With `--proxy-logos`, all of them come through
   it.
+- **Several tuners.** With `inputs` and `output.hdhomerun`, each entry is a
+  tuner on a port of its own, for every input or for one of them
+  (`sources: [name]`): say, one for Plex on port 5004 and one on 5005 for the
+  playlist you only want to record from. Give Plex each address. A tuner
+  has its own channel list, filters and number of tuners; the streams the
+  proxy holds at an account are counted for all.
 - The tuner announces as many tuners as your Xtream account allows
   connections, or, with several sources, as their accounts allow together
   (`--hdhomerun-tuners` to change it): a media server never opens more
@@ -653,8 +828,10 @@ docker compose up -d
 
 - It does not provide channels or streams: you need a playlist or an account
   from a provider.
-- It does not edit the catalogue: no channel editor, no renaming, no guide
-  mapping. Players get what the provider sends.
+- It does not edit the catalogue: no channel editor, no renaming of channels,
+  no guide mapping. Players get what the provider sends; what the proxy
+  changes is the ids and the category names of inputs served together (see
+  [Several inputs](#several-inputs-one-catalogue-or-one-each)).
 - It does not transcode, record or cache streams: they are passed on as they
   come. The one exception is the tuner's HLS channels, which ffmpeg turns into
   MPEG-TS, without encoding them again.

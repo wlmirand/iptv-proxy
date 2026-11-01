@@ -516,6 +516,22 @@ func TestDedupeOfInputs(t *testing.T) {
 	}
 }
 
+func TestOutputWithoutFormats(t *testing.T) {
+	for name, c := range map[string]struct {
+		yaml string
+		want int
+	}{
+		"no formats: every one": {"output:\n  dedupe: none\n", 3},
+		"formats listed":        {"output:\n  formats: [m3u]\n", 1},
+		"an empty list: none":   {"output:\n  formats: []\n", 0},
+	} {
+		conf, err := loadFile(t, c.yaml, nil)
+		if err != nil || conf.Output == nil || len(conf.Output.Formats) != c.want {
+			t.Errorf("%s: %+v, %v", name, conf.Output, err)
+		}
+	}
+}
+
 func TestNoOutputSectionDeliversEverything(t *testing.T) {
 	conf, err := loadFile(t, "inputs:\n  - type: xtream\n    base-url: http://a.example\n    user: u\n    password: p\n", nil)
 	if err != nil || conf.Output != nil || conf.XtreamName != "input 1" || len(conf.Sources) != 0 {
