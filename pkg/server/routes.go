@@ -19,9 +19,12 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/config"
 )
 
 func (c *Config) routes(r *gin.RouterGroup) {
@@ -40,17 +43,21 @@ func (c *Config) routes(r *gin.RouterGroup) {
 	if c.XtreamBaseURL != "" {
 		c.xtreamRoutes(r)
 		if c.xtreamServesPlaylist() && !c.merged() {
-			r.GET("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
-			// XXX Private need: for external Android app
-			r.POST("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
+			if c.delivers(config.OutputM3U) {
+				r.GET("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
+				// XXX Private need: for external Android app
+				r.POST("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
+			}
 
 			return
 		}
 		if c.RemoteURL == nil || c.RemoteURL.String() == "" || c.merged() {
 			// An Xtream account and no playlist of its own: the playlist is
 			// the account's, under the usual name too.
-			r.GET("/"+c.M3UFileName, c.authenticate, c.xtreamPlaylist())
-			r.POST("/"+c.M3UFileName, c.authenticate, c.xtreamPlaylist())
+			if c.delivers(config.OutputM3U) {
+				r.GET("/"+c.M3UFileName, c.authenticate, c.xtreamPlaylist())
+				r.POST("/"+c.M3UFileName, c.authenticate, c.xtreamPlaylist())
+			}
 
 			return
 		}
@@ -69,13 +76,35 @@ func (c *Config) xtreamPlaylist() gin.HandlerFunc {
 	return c.xtreamGet
 }
 
+// delivers tells whether the proxy delivers a format: all of them, unless
+// the configuration file lists them.
+func (c *Config) delivers(format string) bool {
+	return c.Output.Has(format)
+}
+
+// checkOutput reports an output the inputs cannot give.
+func (c *Config) checkOutput() error {
+	if c.Output != nil && c.delivers(config.OutputXtream) && c.XtreamBaseURL == "" {
+		return errors.New("the xtream output needs an Xtream input")
+	}
+	return nil
+}
+
 func (c *Config) xtreamRoutes(r *gin.RouterGroup) {
-	r.GET("/get.php", c.authenticate, c.xtreamPlaylist())
-	r.POST("/get.php", c.authenticate, c.xtreamPlaylist())
-	r.GET("/apiget", c.authenticate, c.xtreamApiGet)
-	r.GET("/player_api.php", c.authenticate, c.xtreamPlayerAPI)
-	r.POST("/player_api.php", c.authenticate, c.xtreamPlayerAPI)
-	r.GET("/xmltv.php", c.authenticate, c.xtreamXMLTV)
+	if c.delivers(config.OutputXtream) {
+		r.GET("/get.php", c.authenticate, c.xtreamPlaylist())
+		r.POST("/get.php", c.authenticate, c.xtreamPlaylist())
+		r.GET("/apiget", c.authenticate, c.xtreamApiGet)
+		r.GET("/player_api.php", c.authenticate, c.xtreamPlayerAPI)
+		r.POST("/player_api.php", c.authenticate, c.xtreamPlayerAPI)
+	}
+	if c.delivers(config.OutputXMLTV) {
+		r.GET("/xmltv.php", c.authenticate, c.xtreamXMLTV)
+	}
+	// The streams are what the Xtream API and the playlist both name.
+	if !c.delivers(config.OutputXtream) && !c.delivers(config.OutputM3U) {
+		return
+	}
 	r.GET("/play/:token/:type", c.xtreamStreamPlay)
 
 	if c.XtreamPassthrough {
@@ -98,10 +127,15 @@ func (c *Config) xtreamRoutes(r *gin.RouterGroup) {
 }
 
 func (c *Config) m3uRoutes(r *gin.RouterGroup) {
+	if c.delivers(config.OutputXMLTV) {
+		r.GET("/xmltv.php", c.authenticate, c.m3uXMLTV)
+	}
+	if !c.delivers(config.OutputM3U) {
+		return
+	}
 	r.GET("/"+c.M3UFileName, c.authenticate, c.getM3U)
 	// XXX Private need: for external Android app
 	r.POST("/"+c.M3UFileName, c.authenticate, c.getM3U)
-	r.GET("/xmltv.php", c.authenticate, c.m3uXMLTV)
 
 	// The last element is the track's file name, there for players that
 	// look at the extension.

@@ -64,12 +64,48 @@ type Source struct {
 	MaxConnections int
 }
 
+// What the proxy delivers to its clients.
+const (
+	// OutputXtream is the Xtream Codes API (player_api.php, get.php) and the
+	// streams it names.
+	OutputXtream = "xtream"
+	// OutputM3U is the M3U playlist (M3UFileName) and the streams it names.
+	OutputM3U = "m3u"
+	// OutputXMLTV is the guide at /xmltv.php.
+	OutputXMLTV = "xmltv"
+)
+
+// Output is what the proxy delivers, when the configuration file says so.
+// The HDHomeRun tuner is chosen by its own options.
+type Output struct {
+	Formats []string
+}
+
+// Has tells whether the proxy delivers a format. Without an Output, it
+// delivers everything its inputs allow.
+func (o *Output) Has(format string) bool {
+	if o == nil {
+		return true
+	}
+	for _, f := range o.Formats {
+		if f == format {
+			return true
+		}
+	}
+	return false
+}
+
 // ProxyConfig Contain original m3u playlist and HostConfiguration
 type ProxyConfig struct {
-	HostConfig           *HostConfiguration
-	XtreamUser           CredentialString
-	XtreamPassword       CredentialString
-	XtreamBaseURL        string
+	HostConfig     *HostConfiguration
+	XtreamUser     CredentialString
+	XtreamPassword CredentialString
+	XtreamBaseURL  string
+	// XtreamName names the Xtream account in logs, and XtreamMaxConnections
+	// is its limit of streams at once (0 asks the provider) when it is one
+	// of several sources.
+	XtreamName           string
+	XtreamMaxConnections int
 	XtreamGenerateApiGet bool
 	// XtreamApiGetMovies adds the provider's movies to the playlist generated
 	// from its API. Off by default: a catalogue of tens of thousands of
@@ -122,6 +158,8 @@ type ProxyConfig struct {
 	// Sources are more Xtream accounts, served with the one of the Xtream
 	// options as one catalogue.
 	Sources []Source
+	// Output, when set, is what the proxy delivers; nil delivers everything.
+	Output *Output
 	// StatusPassword, when set, opens a read-only status page at /status.
 	StatusPassword CredentialString
 	// Version is the proxy's version, shown on the status page.

@@ -20,7 +20,7 @@ func load(t *testing.T, env map[string]string) {
 		t.Setenv("HOME", t.TempDir())
 	}
 	t.Chdir(t.TempDir())
-	for _, name := range []string{"USER", "PASSWORD", "HOSTNAME", "PROXY_USER", "PROXY_PASSWORD", "PROXY_HOSTNAME", "PORT", "M3U_URL", "XTREAM_USER", "XTREAM_PASSWORD", "XTREAM_BASE_URL", "ADVERTISED_PORT", "HTTPS", "USER_AGENT", "XTREAM_API_GET", "XTREAM_API_GET_MOVIES", "NO_STREAM_SHARING", "GROUP_REGEX", "CHANNEL_REGEX", "GROUP_EXCLUDE_REGEX", "CHANNEL_EXCLUDE_REGEX", "LISTEN_ADDRESS", "XMLTV_URL", "MAX_CONNECTIONS", "IPTV_PROXY_CONFIG", "XTREAM_PASSTHROUGH", "HDHOMERUN_GROUP_REGEX", "HDHOMERUN_CHANNEL_REGEX", "HDHOMERUN_GROUP_EXCLUDE_REGEX", "HDHOMERUN_CHANNEL_EXCLUDE_REGEX", "STATUS_PASSWORD"} {
+	for _, name := range []string{"USER", "PASSWORD", "HOSTNAME", "PROXY_USER", "PROXY_PASSWORD", "PROXY_HOSTNAME", "PORT", "M3U_URL", "XTREAM_USER", "XTREAM_PASSWORD", "XTREAM_BASE_URL", "ADVERTISED_PORT", "HTTPS", "USER_AGENT", "XTREAM_API_GET", "XTREAM_API_GET_MOVIES", "NO_STREAM_SHARING", "GROUP_REGEX", "CHANNEL_REGEX", "GROUP_EXCLUDE_REGEX", "CHANNEL_EXCLUDE_REGEX", "LISTEN_ADDRESS", "XMLTV_URL", "MAX_CONNECTIONS", "IPTV_PROXY_CONFIG", "XTREAM_PASSTHROUGH", "HDHOMERUN_GROUP_REGEX", "HDHOMERUN_CHANNEL_REGEX", "HDHOMERUN_GROUP_EXCLUDE_REGEX", "HDHOMERUN_CHANNEL_EXCLUDE_REGEX", "STATUS_PASSWORD", "HDHOMERUN_PORT", "HDHOMERUN_TUNERS"} {
 		t.Setenv(name, "")
 		os.Unsetenv(name) // nolint: errcheck
 	}
@@ -363,5 +363,104 @@ func TestSourcesFromTheConfigurationFile(t *testing.T) {
 	}
 	if len(conf.Sources) != len(want) || conf.Sources[0] != want[0] || conf.Sources[1] != want[1] {
 		t.Errorf("sources: %+v", conf.Sources)
+	}
+}
+
+// loadFile reads the configuration the way the command does, from a file.
+func loadFile(t *testing.T, yaml string, env map[string]string) (*config.ProxyConfig, error) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	env["IPTV_PROXY_CONFIG"] = file
+	load(t, env)
+	t.Cleanup(func() { cfgFile = "" })
+	return proxyConfig(rootCmd)
+}
+
+func TestInputsFromTheConfigurationFile(t *testing.T) {
+	conf, err := loadFile(t, `
+inputs:
+  - name: Brasil
+    type: xtream
+    base-url: http://a.example
+    user: u
+    password: p
+    max-connections: 2
+  - name: Portugal
+    type: xtream
+    base-url: http://b.example
+    user: v
+    password: q
+output:
+  dedupe: guide-id
+  formats: [xtream, m3u, xmltv, m3u]
+  hdhomerun:
+    - port: 5004
+      tuners: 3
+      group-regex: "^PT "
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conf.XtreamName != "Brasil" || conf.XtreamBaseURL != "http://a.example" || conf.XtreamUser != "u" || conf.XtreamPassword != "p" || conf.XtreamMaxConnections != 2 {
+		t.Errorf("first input: %q %q %q %q %d", conf.XtreamName, conf.XtreamBaseURL, conf.XtreamUser, conf.XtreamPassword, conf.XtreamMaxConnections)
+	}
+	if len(conf.Sources) != 1 || conf.Sources[0] != (config.Source{Name: "Portugal", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
+		t.Errorf("sources: %+v", conf.Sources)
+	}
+	if conf.Output == nil || len(conf.Output.Formats) != 3 || !conf.Output.Has("m3u") {
+		t.Errorf("output: %+v", conf.Output)
+	}
+	if conf.HDHomeRunPort != 5004 || conf.HDHomeRunTuners != 3 || conf.HDHomeRunFilter.Group != "^PT " {
+		t.Errorf("tuner: %d, %d, %+v", conf.HDHomeRunPort, conf.HDHomeRunTuners, conf.HDHomeRunFilter)
+	}
+}
+
+func TestNoOutputSectionDeliversEverything(t *testing.T) {
+	conf, err := loadFile(t, "inputs:\n  - type: xtream\n    base-url: http://a.example\n    user: u\n    password: p\n", nil)
+	if err != nil || conf.Output != nil || conf.XtreamName != "input 1" || len(conf.Sources) != 0 {
+		t.Errorf("output %+v, name %q, sources %+v, err %v", conf.Output, conf.XtreamName, conf.Sources, err)
+	}
+}
+
+func TestInputsAndOutputRefused(t *testing.T) {
+	one := "inputs:\n  - type: xtream\n    base-url: http://a.example\n    user: u\n    password: p\n"
+	two := one + "  - type: xtream\n    base-url: http://b.example\n    user: v\n    password: q\n"
+	for name, c := range map[string]struct {
+		yaml string
+		env  map[string]string
+		want string
+	}{
+		"a type is needed":      {"inputs:\n  - base-url: http://a.example\n    user: u\n    password: p\n", nil, "type is missing"},
+		"m3u is not there yet":  {"inputs:\n  - type: m3u\n", nil, "not supported yet"},
+		"an unknown type":       {"inputs:\n  - type: stalker\n", nil, "stalker"},
+		"incomplete account":    {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
+		"the same name twice":   {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},
+		"not yet: individual":   {one + "    individual: true\n", nil, "not supported yet"},
+		"not yet: base-id":      {one + "    base-id: 0\n", nil, "not supported yet"},
+		"not yet: prefix":       {one + "    category-prefix: BR\n", nil, "not supported yet"},
+		"max alone":             {one + "    max-connections: 1\n", nil, "several inputs"},
+		"several need a dedupe": {two, nil, "output.dedupe"},
+		"dedupe none":           {one + "output:\n  dedupe: none\n", nil, "not supported yet"},
+		"an old option":         {one, map[string]string{"XTREAM_BASE_URL": "http://z.example"}, "no inputs"},
+		"an old m3u option":     {one, map[string]string{"M3U_URL": "http://z.example/x.m3u"}, "no inputs"},
+		"old sources":           {one + "sources:\n  - xtream-base-url: http://b.example\n", nil, "no inputs"},
+		"unknown format":        {"output:\n  formats: [hls]\n", nil, "unknown format"},
+		"not combined":          {"output:\n  combined: false\n", nil, "not supported yet"},
+		"a separator":           {"output:\n  category-separator: ' - '\n", nil, "not supported yet"},
+		"a tuner with no port":  {"output:\n  hdhomerun:\n    - tuners: 2\n", nil, "port"},
+		"two tuners":            {"output:\n  hdhomerun:\n    - port: 5004\n    - port: 5005\n", nil, "one tuner"},
+		"tuner sources":         {"output:\n  hdhomerun:\n    - port: 5004\n      sources: [a]\n", nil, "not supported yet"},
+		"old tuner option":      {"output:\n  formats: [m3u]\n", map[string]string{"HDHOMERUN_PORT": "5004"}, "output.hdhomerun"},
+	} {
+		_, err := loadFile(t, c.yaml, c.env)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %v, want one with %q", name, err, c.want)
+		}
 	}
 }

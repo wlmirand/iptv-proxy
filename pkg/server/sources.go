@@ -133,7 +133,11 @@ func (c *Config) setupSources() error {
 		return errors.New("sources are Xtream accounts: they do not go with an M3U playlist (--m3u-url)")
 	}
 	if c.XtreamBaseURL != "" {
-		c.sources = append(c.sources, &source{name: "xtream", account: c.providerAccount()})
+		name := c.XtreamName
+		if name == "" {
+			name = "xtream"
+		}
+		c.sources = append(c.sources, &source{name: name, account: c.providerAccount(), max: c.XtreamMaxConnections})
 	}
 	for i, s := range c.Sources {
 		name := s.Name

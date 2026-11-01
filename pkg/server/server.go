@@ -174,6 +174,9 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	if err := c.setupSources(); err != nil {
 		return nil, err
 	}
+	if err := c.checkOutput(); err != nil {
+		return nil, err
+	}
 	if err := c.setupUsers(); err != nil {
 		return nil, err
 	}

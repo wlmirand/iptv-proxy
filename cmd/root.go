@@ -146,6 +146,9 @@ func proxyConfig(cmd *cobra.Command) (*config.ProxyConfig, error) {
 	if conf.Sources, err = configSources(); err != nil {
 		return nil, err
 	}
+	if err := applyInputsAndOutput(conf); err != nil {
+		return nil, err
+	}
 	// An invalid expression is reported before anything starts.
 	if _, err := filter.New(conf.Filter); err != nil {
 		return nil, err
