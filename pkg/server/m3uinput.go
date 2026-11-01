@@ -167,21 +167,36 @@ func playlistGuide(header string) string {
 	return ""
 }
 
-// tracksOf are the tracks of a playlist that have an address, one for each
-// address: the live channels, and the movies (those whose address is a file).
+// trackID tells a track from another: its address and its group. The same
+// address in two groups (a movie in two categories) is two entries.
+func trackID(track m3u.Track) string {
+	return track.URI + "\x00" + track.Group()
+}
+
+// tracksOf are the tracks of a playlist that have an address: the live
+// channels, and the movies (those whose address is a file). A track that
+// repeats another (the same address in the same group) is left out.
 func tracksOf(playlist *m3u.Playlist) (live, movies []m3u.Track) {
 	seen := map[string]bool{}
+	dropped := 0
 	for _, track := range playlist.Tracks {
 		address, err := url.Parse(track.URI)
-		if err != nil || track.URI == "" || seen[track.URI] {
+		if err != nil || track.URI == "" {
+			dropped++
 			continue
 		}
-		seen[track.URI] = true
+		if seen[trackID(track)] {
+			continue
+		}
+		seen[trackID(track)] = true
 		if fileExtensions[strings.ToLower(path.Ext(address.Path))] {
 			movies = append(movies, track)
 		} else {
 			live = append(live, track)
 		}
+	}
+	if dropped > 0 {
+		log.Printf("[iptv-proxy] %d tracks of a playlist have no usable address: left out", dropped)
 	}
 	return live, movies
 }
@@ -202,7 +217,7 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 	var liveOrder, movieOrder []string
 	for _, tracks := range [][]m3u.Track{live, movies} {
 		for _, track := range tracks {
-			addresses = append(addresses, track.URI)
+			addresses = append(addresses, trackID(track))
 			g := track.Group()
 			if g == "" {
 				continue
@@ -276,7 +291,7 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 	for i, track := range live {
 		logo, _ := m3u.Attribute(track.ExtInf, "tvg-logo")
 		guide, _ := m3u.Attribute(track.ExtInf, "tvg-id")
-		id := streamIDs[track.URI]
+		id := streamIDs[trackID(track)]
 		cat.addresses[strconv.FormatInt(id, 10)] = track.URI
 		streams = append(streams, stream{
 			Num: i + 1, Name: nameOf(track), StreamType: "live", StreamID: id, StreamIcon: logo,
@@ -287,7 +302,7 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 	for i, track := range movies {
 		logo, _ := m3u.Attribute(track.ExtInf, "tvg-logo")
 		extension := strings.TrimPrefix(strings.ToLower(path.Ext(pathOf(track.URI))), ".")
-		id := streamIDs[track.URI]
+		id := streamIDs[trackID(track)]
 		key := strconv.FormatInt(id, 10)
 		cat.addresses[key] = track.URI
 		cat.details[key] = movieDetails{name: nameOf(track), icon: logo, extension: extension}

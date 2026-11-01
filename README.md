@@ -496,7 +496,7 @@ same catalogue, ids, guide and connection limits as one, and every output
   those of a playlist are always in the playlist: they were in it to begin
   with, and `--xtream-api-get-movies` is for accounts. A playlist says
   nothing of seasons: it has no series, and a series' episodes are movies.
-  A track repeated is one entry. A movie's `.m3u8` address cannot be told from
+  An address in two groups is two entries, one in each category; the same address in the same group is one. A movie's `.m3u8` address cannot be told from
   a live channel's: it is a channel.
 - A track's **category** is its `group-title`, its guide id its `tvg-id`.
   Movies and channels have their own lists of categories.

@@ -561,3 +561,43 @@ func TestM3UInputMoviesAmongSources(t *testing.T) {
 		}
 	}
 }
+
+// The same address in two groups is two entries, one in each category; the
+// same address in the same group is one.
+func TestM3UInputAddressInTwoGroups(t *testing.T) {
+	films := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "film:"+r.URL.Path) }))
+	t.Cleanup(films.Close)
+	list := t.TempDir() + "/list.m3u"
+	content := "#EXTM3U\n" +
+		"#EXTINF:-1 group-title=\"Filmes | Action\",Die Hard\n" + films.URL + "/f/dh.mkv\n" +
+		"#EXTINF:-1 group-title=\"Filmes | Lancamentos\",Die Hard\n" + films.URL + "/f/dh.mkv\n" +
+		"#EXTINF:-1 group-title=\"Filmes | Lancamentos\",Die Hard\n" + films.URL + "/f/dh.mkv\n" +
+		"#EXTINF:-1 group-title=\"Canais | News\",News\n" + films.URL + "/live/news.ts\n" +
+		"#EXTINF:-1 group-title=\"Canais | Favoritos\",News\n" + films.URL + "/live/news.ts\n"
+	if err := os.WriteFile(list, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := m3uOnly(t, newProvider(t), func(c *config.ProxyConfig) { c.Sources[0].URL = list })
+
+	movies := listOf(t, base, "get_vod_streams", "stream_id")
+	live := listOf(t, base, "get_live_streams", "stream_id")
+	if len(movies) != 2 || len(live) != 2 {
+		t.Fatalf("movies %s, channels %s", ids(movies), ids(live))
+	}
+	categories := map[string]bool{}
+	for id, m := range movies {
+		categories[fmt.Sprint(m["category_id"])] = true
+		// both entries play the same file
+		if resp, body := get(t, base+"/movie/me/secret/"+id+".mkv"); resp.StatusCode != http.StatusOK || body != "film:/f/dh.mkv" {
+			t.Errorf("movie %s: status %d, %q", id, resp.StatusCode, body)
+		}
+	}
+	if len(categories) != 2 {
+		t.Errorf("the movie is in %d categories", len(categories))
+	}
+
+	_, playlist := get(t, base+"/iptv.m3u?"+creds)
+	if n := strings.Count(playlist, "#EXTINF"); n != 4 {
+		t.Errorf("%d entries in the playlist:\n%s", n, playlist)
+	}
+}
