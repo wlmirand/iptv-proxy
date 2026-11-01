@@ -128,6 +128,10 @@ type Config struct {
 	// one of them.
 	views []*Config
 	view  bool
+	// tuners are the HDHomeRun tuners besides the one of HDHomeRunPort;
+	// tunerClone tells that this Config is one of them.
+	tuners     []*Config
+	tunerClone bool
 	// liveAccess are the live streams users with filters may watch.
 	liveAccess liveAccess
 }
@@ -230,6 +234,9 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	if err := c.setupViews(); err != nil {
 		return nil, err
 	}
+	if err := c.setupTuners(); err != nil {
+		return nil, err
+	}
 
 	return c, nil
 }
@@ -278,6 +285,9 @@ func (c *Config) Serve() error {
 	servers := []*http.Server{{Addr: c.listenAddress(), Handler: c.Handler(), ReadHeaderTimeout: 10 * time.Second}}
 	if c.HDHomeRunPort != 0 {
 		servers = append(servers, &http.Server{Addr: c.hdhomerunAddress(), Handler: c.HDHomeRunHandler(), ReadHeaderTimeout: 10 * time.Second})
+	}
+	for _, t := range c.tuners {
+		servers = append(servers, &http.Server{Addr: t.hdhomerunAddress(), Handler: t.HDHomeRunHandler(), ReadHeaderTimeout: 10 * time.Second})
 	}
 	stopped := make(chan error, len(servers))
 	for _, srv := range servers {

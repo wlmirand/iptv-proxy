@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -371,5 +373,94 @@ func TestTunerAddress(t *testing.T) {
 	c := &Config{ProxyConfig: &config.ProxyConfig{HDHomeRunPort: 5004, ListenAddress: "192.168.1.10"}}
 	if got := c.hdhomerunAddress(); got != "192.168.1.10:5004" {
 		t.Errorf("address = %q", got)
+	}
+}
+
+// The tuners of the settings: one serves every source, another one source
+// alone.
+func TestTunersOfSources(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	conf := &config.ProxyConfig{
+		HostConfig: &config.HostConfiguration{Hostname: "proxy.example", Port: 8080}, AdvertisedPort: 8080,
+		XtreamBaseURL: p.URL, XtreamUser: xUser, XtreamPassword: xPass, XtreamName: "brasil",
+		User: user, Password: pass, M3UFileName: "iptv.m3u", M3UCacheExpiration: 1,
+		Sources: []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u"}},
+		Tuners: []config.Tuner{
+			{Port: 5004, Count: 3},
+			{Port: 5005, Source: "portugal", Filter: filter.Patterns{ChannelExclude: "Three"}},
+			{Port: 5006, Source: "brasil", Count: 1},
+		},
+	}
+	c, err := NewServer(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.tuners) != 3 {
+		t.Fatalf("%d tuners", len(c.tuners))
+	}
+	serve := func(i int) string {
+		srv := httptest.NewServer(c.tuners[i].HDHomeRunHandler())
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	all, portugal, brasil := serve(0), serve(1), serve(2)
+
+	names := func(tuner string) string {
+		var out []string
+		for _, e := range lineupOf(t, tuner) {
+			out = append(out, e.GuideName)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	if got := names(all); !strings.Contains(got, "One, the first") || !strings.Contains(got, "Lost") || len(strings.Split(got, ",")) < 6 {
+		t.Errorf("the combined tuner: %s", got)
+	}
+	if got := names(portugal); got != "One, the first,Two" {
+		t.Errorf("the tuner of the playlist, with a filter: %s", got)
+	}
+	if got := names(brasil); strings.Contains(got, "One, the first") || got == "" {
+		t.Errorf("the tuner of the account: %s", got)
+	}
+
+	// each has a count and an id of its own
+	ids := map[string]bool{}
+	for tuner, want := range map[string]float64{all: 3, brasil: 1} {
+		_, body := get(t, tuner+"/discover.json")
+		var d map[string]any
+		if err := json.Unmarshal([]byte(body), &d); err != nil || d["TunerCount"] != want {
+			t.Errorf("%s: %v, %v", tuner, d["TunerCount"], err)
+		}
+		ids[fmt.Sprint(d["DeviceID"])] = true
+	}
+	if len(ids) != 2 {
+		t.Errorf("tuners with the same device id: %v", ids)
+	}
+
+	// a channel plays from the tuner
+	for _, e := range lineupOf(t, portugal) {
+		if e.GuideName == "One, the first" {
+			if resp, body := get(t, e.URL); resp.StatusCode != http.StatusOK || body != "track-a" {
+				t.Errorf("channel of the playlist: status %d, %q", resp.StatusCode, body)
+			}
+		}
+	}
+}
+
+func TestTunerSettingsAreChecked(t *testing.T) {
+	p := newProvider(t)
+	for name, tuners := range map[string][]config.Tuner{
+		"an unknown source":     {{Port: 5004, Source: "nope"}},
+		"the same port twice":   {{Port: 5004}, {Port: 5004}},
+		"the port of the proxy": {{Port: 8080}},
+	} {
+		conf := &config.ProxyConfig{
+			HostConfig: &config.HostConfiguration{Hostname: "proxy.example", Port: 8080}, XtreamBaseURL: p.URL,
+			XtreamUser: xUser, XtreamPassword: xPass, User: user, Password: pass, M3UFileName: "iptv.m3u", M3UCacheExpiration: 1,
+			Tuners: tuners,
+		}
+		if _, err := NewServer(conf); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

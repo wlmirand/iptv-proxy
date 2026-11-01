@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/config"
+	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/filter"
 )
 
 // A source may also be served on its own, under "/<path>/": the same
@@ -71,17 +73,33 @@ func (c *Config) newView(src *source) *Config {
 	conf.XtreamBaseURL = src.account.BaseURL
 	conf.XtreamUser = config.CredentialString(src.account.User)
 	conf.XtreamPassword = config.CredentialString(src.account.Password)
-	conf.Sources = nil
-	conf.NoCombined = false
-	// one status page, and one tuner: the combined catalogue's
-	conf.StatusPassword = ""
-	conf.HDHomeRunPort = 0
 
 	// the source as it is, on its own: no range of ids, no prefix
 	own := *src
 	own.index, own.base, own.baseID, own.prefix = 0, 0, nil, ""
 
-	v := &Config{
+	users := make([]*proxyUser, len(c.users))
+	for i, u := range c.users {
+		alone := *u
+		alone.provider = src.account
+		users[i] = &alone
+	}
+	return c.derive(conf, []*source{&own}, users, true)
+}
+
+// derive returns a Config that serves sources as c does: what is the
+// accounts' is shared, the rest (what is remembered of the catalogues, the
+// answers kept) is its own.
+func (c *Config) derive(conf config.ProxyConfig, sources []*source, users []*proxyUser, view bool) *Config {
+	// one status page, one tuner and one set of tuners: the combined
+	// catalogue's
+	conf.Sources = nil
+	conf.NoCombined = false
+	conf.StatusPassword = ""
+	conf.HDHomeRunPort = 0
+	conf.Tuners = nil
+
+	d := &Config{
 		ProxyConfig:          &conf,
 		endpointAntiColision: c.endpointAntiColision,
 		client:               c.client,
@@ -91,18 +109,54 @@ func (c *Config) newView(src *source) *Config {
 		m3uCache:             map[string]cachedM3U{},
 		rules:                c.rules,
 		tunerRules:           c.tunerRules,
+		ffmpeg:               c.ffmpeg,
+		ffmpegWait:           c.ffmpegWait,
 		lastGood:             newLastGood(),
+		users:                users,
 		usersByName:          map[string]*proxyUser{},
-		sources:              []*source{&own},
+		sources:              sources,
 		m3uInputs:            c.m3uInputs,
-		view:                 true,
+		view:                 view,
 	}
-	v.merge.categories = map[string]shownCategories{}
-	for _, u := range c.users {
-		own := *u
-		own.provider = src.account
-		v.users = append(v.users, &own)
-		v.usersByName[u.name.String()] = &own
+	d.merge.categories = map[string]shownCategories{}
+	for _, u := range users {
+		d.usersByName[u.name.String()] = u
 	}
-	return v
+	return d
+}
+
+// setupTuners builds the HDHomeRun tuners of the settings: each serves the
+// combined catalogue, or one source alone.
+func (c *Config) setupTuners() error {
+	ports := map[int]bool{c.HostConfig.Port: true}
+	if c.HDHomeRunPort != 0 {
+		ports[c.HDHomeRunPort] = true
+	}
+	for _, t := range c.Tuners {
+		if ports[t.Port] {
+			return fmt.Errorf("tuner: port %d is used twice, or is the proxy's", t.Port)
+		}
+		ports[t.Port] = true
+
+		own, err := filter.New(t.Filter)
+		if err != nil {
+			return fmt.Errorf("the HDHomeRun tuner on port %d: %w", t.Port, err)
+		}
+		var tc *Config
+		if t.Source == "" {
+			tc = c.derive(*c.ProxyConfig, c.sources, nil, false)
+		} else {
+			i := slices.IndexFunc(c.sources, func(s *source) bool { return s.name == t.Source })
+			if i < 0 {
+				return fmt.Errorf("the HDHomeRun tuner on port %d: no source is named %q", t.Port, t.Source)
+			}
+			tc = c.newView(c.sources[i])
+			tc.users, tc.usersByName = nil, map[string]*proxyUser{}
+		}
+		tc.HDHomeRunPort, tc.HDHomeRunTuners, tc.HDHomeRunFilter = t.Port, t.Count, t.Filter
+		tc.tunerRules = filter.Combine(c.rules, own)
+		tc.tunerClone = true
+		c.tuners = append(c.tuners, tc)
+	}
+	return nil
 }

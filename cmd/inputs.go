@@ -33,7 +33,8 @@ const (
 	inputXtream = config.SourceXtream
 	inputM3U    = config.SourceM3U
 
-	dedupeGuideID = "guide-id"
+	dedupeGuideID = config.DedupeGuideID
+	dedupeNone    = config.DedupeNone
 )
 
 // fileInput is an input as the configuration file writes it. What the
@@ -138,28 +139,30 @@ func applyOutput(conf *config.ProxyConfig, out *fileOutput) error {
 	switch {
 	case out.Combined != nil && !*out.Combined:
 		conf.NoCombined = true
-	case out.Dedupe != "" && out.Dedupe != dedupeGuideID:
-		return fmt.Errorf("dedupe: %q is not supported yet: only %s is", out.Dedupe, dedupeGuideID)
+	case out.Dedupe != "" && out.Dedupe != dedupeGuideID && out.Dedupe != dedupeNone:
+		return fmt.Errorf("dedupe: %q is unknown: it is %s or %s", out.Dedupe, dedupeNone, dedupeGuideID)
 	}
 
-	switch len(out.HDHomeRun) {
-	case 0:
-	case 1:
-		t := out.HDHomeRun[0]
+	for _, t := range out.HDHomeRun {
 		switch {
 		case t.Port <= 0:
 			return errors.New("hdhomerun needs a port")
-		case len(t.Sources) > 0:
-			return errors.New("hdhomerun: sources is not supported yet")
+		case t.Port == conf.HostConfig.Port:
+			return fmt.Errorf("hdhomerun: port %d is the proxy's", t.Port)
+		case len(t.Sources) > 1:
+			return fmt.Errorf("hdhomerun on port %d: a tuner serves one source, or all of them", t.Port)
 		}
-		conf.HDHomeRunPort = t.Port
-		conf.HDHomeRunTuners = t.Tuners
+		tuner := config.Tuner{
+			Port: t.Port, Count: t.Tuners,
+			Filter: filter.Patterns{Group: t.GroupRegex, Channel: t.ChannelRegex, GroupExclude: t.GroupExcludeRegex, ChannelExclude: t.ChannelExcludeRegex},
+		}
+		if len(t.Sources) == 1 {
+			tuner.Source = t.Sources[0]
+		}
 		if t.FFmpeg != "" {
 			conf.FFmpeg = t.FFmpeg
 		}
-		conf.HDHomeRunFilter = filter.Patterns{Group: t.GroupRegex, Channel: t.ChannelRegex, GroupExclude: t.GroupExcludeRegex, ChannelExclude: t.ChannelExcludeRegex}
-	default:
-		return errors.New("hdhomerun: one tuner only, for now")
+		conf.Tuners = append(conf.Tuners, tuner)
 	}
 	return nil
 }
@@ -179,8 +182,10 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 	if len(listed) == 0 {
 		return errors.New("none listed")
 	}
-	if len(listed) > 1 && (out == nil || out.Dedupe != dedupeGuideID) {
-		return fmt.Errorf("several inputs are combined as one catalogue, where a channel with the same guide id is shown once: set output.dedupe to %s", dedupeGuideID)
+	// Inputs are told apart unless the output says to show a channel once.
+	conf.Dedupe = dedupeNone
+	if out != nil && out.Dedupe != "" {
+		conf.Dedupe = out.Dedupe
 	}
 
 	names := map[string]bool{}

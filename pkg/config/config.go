@@ -105,6 +105,29 @@ type Output struct {
 	CategorySeparator string
 }
 
+// What the combined catalogue does with a live channel that several sources
+// have (the same guide id).
+const (
+	// DedupeGuideID shows it once, from the first of them; the others are
+	// its fallbacks. It is what an empty Dedupe means.
+	DedupeGuideID = "guide-id"
+	// DedupeNone shows it from each source.
+	DedupeNone = "none"
+)
+
+// Tuner is an HDHomeRun tuner: a port serving the live channels of the
+// combined catalogue, or of one source.
+type Tuner struct {
+	Port int
+	// Count is the number of tuners it announces; 0 asks the provider.
+	Count int
+	// Filter keeps the tuner's channels, after the proxy's filters.
+	Filter filter.Patterns
+	// Source is the name of the source it serves alone; empty is the
+	// combined catalogue.
+	Source string
+}
+
 // DefaultCategorySeparator is the separator between a category prefix and a
 // category.
 const DefaultCategorySeparator = " | "
@@ -146,6 +169,10 @@ type ProxyConfig struct {
 	XtreamCategoryPrefix string
 	XtreamPath           string
 	XtreamIndividual     bool
+	// Tuners are more HDHomeRun tuners than the one of HDHomeRunPort.
+	Tuners []Tuner
+	// Dedupe is DedupeGuideID or DedupeNone, for sources served as one.
+	Dedupe string
 	// NoCombined leaves out the combined catalogue: only the sources'
 	// own views are served.
 	NoCombined           bool

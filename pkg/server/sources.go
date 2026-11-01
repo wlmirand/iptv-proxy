@@ -48,6 +48,7 @@ import (
 // Categories of the same name are one. A live channel several sources have
 // (the same guide id) is shown once, from the first of them; the others are
 // its fallbacks, used when it fails or its source has no connection left.
+// That is the choice of dedupe: with none, it is shown from each source.
 // With a single source, nothing of this applies: answers are the
 // provider's own.
 
@@ -450,7 +451,7 @@ func (c *Config) mergedList(ctx *gin.Context, cat catalogue, params url.Values) 
 		err := xtream.EachEntry(body, func(entry map[string]any, raw []byte) error {
 			id := xtream.Text(entry[cat.id])
 			shown := shownID(c.sources[i].base, id)
-			if guide := xtream.Text(entry["epg_channel_id"]); cat.live && guide != "" {
+			if guide := xtream.Text(entry["epg_channel_id"]); cat.live && guide != "" && c.Dedupe != config.DedupeNone {
 				first := byGuide[guide]
 				switch {
 				case first == nil:

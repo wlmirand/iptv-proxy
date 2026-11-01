@@ -546,3 +546,20 @@ func TestSourcesSettings(t *testing.T) {
 		}
 	}
 }
+
+// With dedupe none, a live channel two sources have is shown from each, and
+// none is the other's fallback.
+func TestSourcesDedupeNone(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+
+	once := listOf(t, proxy(t, p, withSource(q)), "get_live_streams", "stream_id")
+	base := proxy(t, p, func(c *config.ProxyConfig) {
+		withSource(q)(c)
+		c.Dedupe = config.DedupeNone
+	})
+	all := listOf(t, base, "get_live_streams", "stream_id")
+	// "One", with the guide id one.fr, is at both accounts
+	if once["100000001"] != nil || all["100000001"] == nil || all["1"] == nil || len(all) != len(once)+1 {
+		t.Errorf("one.fr: shown once %s, from each source %s", ids(once), ids(all))
+	}
+}

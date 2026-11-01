@@ -409,6 +409,8 @@ output:
     - port: 5004
       tuners: 3
       group-regex: "^PT "
+    - port: 5005
+      sources: [Portugal]
 `, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -436,8 +438,14 @@ output:
 	if conf.Output == nil || len(conf.Output.Formats) != 3 || !conf.Output.Has("m3u") {
 		t.Errorf("output: %+v", conf.Output)
 	}
-	if conf.HDHomeRunPort != 5004 || conf.HDHomeRunTuners != 3 || conf.HDHomeRunFilter.Group != "^PT " {
-		t.Errorf("tuner: %d, %d, %+v", conf.HDHomeRunPort, conf.HDHomeRunTuners, conf.HDHomeRunFilter)
+	if len(conf.Tuners) != 2 || conf.HDHomeRunPort != 0 {
+		t.Fatalf("tuners: %+v, port %d", conf.Tuners, conf.HDHomeRunPort)
+	}
+	if got := conf.Tuners[0]; got.Port != 5004 || got.Count != 3 || got.Filter.Group != "^PT " || got.Source != "" {
+		t.Errorf("tuner: %+v", got)
+	}
+	if got := conf.Tuners[1]; got.Port != 5005 || got.Source != "Portugal" {
+		t.Errorf("tuner of a source: %+v", got)
 	}
 }
 
@@ -479,6 +487,35 @@ inputs:
 	}
 }
 
+func TestDedupeOfInputs(t *testing.T) {
+	two := `inputs:
+  - type: xtream
+    base-url: http://a.example
+    user: u
+    password: p
+  - type: xtream
+    base-url: http://b.example
+    user: v
+    password: q
+`
+	for name, c := range map[string]struct{ yaml, want string }{
+		"by default, inputs are told apart": {two, "none"},
+		"as the output says":                {two + "output:\n  dedupe: guide-id\n", "guide-id"},
+		"none, said":                        {two + "output:\n  dedupe: none\n", "none"},
+	} {
+		conf, err := loadFile(t, c.yaml, nil)
+		if err != nil || conf.Dedupe != c.want {
+			t.Errorf("%s: dedupe %q, err %v, want %q", name, conf.Dedupe, err, c.want)
+		}
+	}
+
+	// the sources of the old settings keep showing a channel once
+	conf, err := loadFile(t, "sources:\n  - xtream-base-url: http://b.example\n    xtream-user: u\n    xtream-password: p\n", nil)
+	if err != nil || conf.Dedupe != "" {
+		t.Errorf("sources: dedupe %q, err %v", conf.Dedupe, err)
+	}
+}
+
 func TestNoOutputSectionDeliversEverything(t *testing.T) {
 	conf, err := loadFile(t, "inputs:\n  - type: xtream\n    base-url: http://a.example\n    user: u\n    password: p\n", nil)
 	if err != nil || conf.Output != nil || conf.XtreamName != "input 1" || len(conf.Sources) != 0 {
@@ -494,32 +531,31 @@ func TestInputsAndOutputRefused(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		"a type is needed":      {"inputs:\n  - base-url: http://a.example\n    user: u\n    password: p\n", nil, "type is missing"},
-		"m3u needs its url":     {"inputs:\n  - type: m3u\n", nil, "needs its url"},
-		"m3u with an account":   {"inputs:\n  - type: m3u\n    url: http://a.example/l.m3u\n    user: u\n", nil, "for an xtream input"},
-		"xtream with a url":     {one + "    url: http://a.example/l.m3u\n", nil, "for an m3u input"},
-		"passthrough":           {"inputs:\n  - type: xtream-passthrough\n", nil, "not supported yet"},
-		"an unknown type":       {"inputs:\n  - type: stalker\n", nil, "stalker"},
-		"incomplete account":    {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
-		"the same name twice":   {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},
-		"individual no path":    {"output:\n  dedupe: guide-id\n" + two + "    individual: true\n", nil, "needs a path"},
-		"path alone":            {"output:\n  dedupe: guide-id\n" + two + "    path: br\n", nil, "path is for"},
-		"individual alone":      {one + "    individual: true\n    path: br\n", nil, "several inputs"},
-		"base-id alone":         {one + "    base-id: 0\n", nil, "several inputs"},
-		"negative base-id":      {"output:\n  dedupe: guide-id\n" + two + "    base-id: -1\n", nil, "negative"},
-		"prefix alone":          {one + "    category-prefix: BR\n", nil, "several inputs"},
-		"max alone":             {one + "    max-connections: 1\n", nil, "several inputs"},
-		"several need a dedupe": {two, nil, "output.dedupe"},
-		"dedupe none":           {one + "output:\n  dedupe: none\n", nil, "not supported yet"},
-		"an old option":         {one, map[string]string{"XTREAM_BASE_URL": "http://z.example"}, "no inputs"},
-		"an old m3u option":     {one, map[string]string{"M3U_URL": "http://z.example/x.m3u"}, "no inputs"},
-		"old sources":           {one + "sources:\n  - xtream-base-url: http://b.example\n", nil, "no inputs"},
-		"unknown format":        {"output:\n  formats: [hls]\n", nil, "unknown format"},
-		"nothing served":        {"output:\n  combined: false\n", nil, "nothing would be served"},
-		"a tuner with no port":  {"output:\n  hdhomerun:\n    - tuners: 2\n", nil, "port"},
-		"two tuners":            {"output:\n  hdhomerun:\n    - port: 5004\n    - port: 5005\n", nil, "one tuner"},
-		"tuner sources":         {"output:\n  hdhomerun:\n    - port: 5004\n      sources: [a]\n", nil, "not supported yet"},
-		"old tuner option":      {"output:\n  formats: [m3u]\n", map[string]string{"HDHOMERUN_PORT": "5004"}, "output.hdhomerun"},
+		"a type is needed":          {"inputs:\n  - base-url: http://a.example\n    user: u\n    password: p\n", nil, "type is missing"},
+		"m3u needs its url":         {"inputs:\n  - type: m3u\n", nil, "needs its url"},
+		"m3u with an account":       {"inputs:\n  - type: m3u\n    url: http://a.example/l.m3u\n    user: u\n", nil, "for an xtream input"},
+		"xtream with a url":         {one + "    url: http://a.example/l.m3u\n", nil, "for an m3u input"},
+		"passthrough":               {"inputs:\n  - type: xtream-passthrough\n", nil, "not supported yet"},
+		"an unknown type":           {"inputs:\n  - type: stalker\n", nil, "stalker"},
+		"incomplete account":        {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
+		"the same name twice":       {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},
+		"individual no path":        {"output:\n  dedupe: guide-id\n" + two + "    individual: true\n", nil, "needs a path"},
+		"path alone":                {"output:\n  dedupe: guide-id\n" + two + "    path: br\n", nil, "path is for"},
+		"individual alone":          {one + "    individual: true\n    path: br\n", nil, "several inputs"},
+		"base-id alone":             {one + "    base-id: 0\n", nil, "several inputs"},
+		"negative base-id":          {"output:\n  dedupe: guide-id\n" + two + "    base-id: -1\n", nil, "negative"},
+		"prefix alone":              {one + "    category-prefix: BR\n", nil, "several inputs"},
+		"max alone":                 {one + "    max-connections: 1\n", nil, "several inputs"},
+		"unknown dedupe":            {one + "output:\n  dedupe: title\n", nil, "unknown"},
+		"an old option":             {one, map[string]string{"XTREAM_BASE_URL": "http://z.example"}, "no inputs"},
+		"an old m3u option":         {one, map[string]string{"M3U_URL": "http://z.example/x.m3u"}, "no inputs"},
+		"old sources":               {one + "sources:\n  - xtream-base-url: http://b.example\n", nil, "no inputs"},
+		"unknown format":            {"output:\n  formats: [hls]\n", nil, "unknown format"},
+		"nothing served":            {"output:\n  combined: false\n", nil, "nothing would be served"},
+		"a tuner with no port":      {"output:\n  hdhomerun:\n    - tuners: 2\n", nil, "port"},
+		"tuner on the proxy's port": {"output:\n  hdhomerun:\n    - port: 8080\n", nil, "the proxy's"},
+		"tuner of two sources":      {"output:\n  hdhomerun:\n    - port: 5004\n      sources: [a, b]\n", nil, "one source"},
+		"old tuner option":          {"output:\n  formats: [m3u]\n", map[string]string{"HDHOMERUN_PORT": "5004"}, "output.hdhomerun"},
 	} {
 		_, err := loadFile(t, c.yaml, c.env)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

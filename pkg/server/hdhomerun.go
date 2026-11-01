@@ -97,7 +97,12 @@ func tunerBase(ctx *gin.Context) string {
 
 // deviceID is the tuner's id: the same settings give the same id.
 func (c *Config) deviceID() string {
-	sum := sha256.Sum256([]byte("iptv-proxy tuner\x00" + c.XtreamBaseURL + "\x00" + c.XtreamUser.String() + "\x00" + c.remoteAddress()))
+	seed := "iptv-proxy tuner\x00" + c.XtreamBaseURL + "\x00" + c.XtreamUser.String() + "\x00" + c.remoteAddress()
+	if c.tunerClone {
+		// tuners of the same account are told apart by their port
+		seed += "\x00" + strconv.Itoa(c.HDHomeRunPort)
+	}
+	sum := sha256.Sum256([]byte(seed))
 	return strings.ToUpper(hex.EncodeToString(sum[:4]))
 }
 
