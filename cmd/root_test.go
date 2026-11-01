@@ -419,7 +419,7 @@ output:
 		t.Errorf("base ids: %v, %v", got.BaseID, conf.XtreamBaseID)
 	}
 	got.BaseID = nil
-	if got != (config.Source{Name: "Portugal", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
+	if got != (config.Source{Name: "Portugal", Type: "xtream", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
 		t.Errorf("sources: %+v", conf.Sources)
 	}
 	if conf.Output == nil || len(conf.Output.Formats) != 3 || !conf.Output.Has("m3u") {
@@ -427,6 +427,44 @@ output:
 	}
 	if conf.HDHomeRunPort != 5004 || conf.HDHomeRunTuners != 3 || conf.HDHomeRunFilter.Group != "^PT " {
 		t.Errorf("tuner: %d, %d, %+v", conf.HDHomeRunPort, conf.HDHomeRunTuners, conf.HDHomeRunFilter)
+	}
+}
+
+func TestM3UInputsFromTheConfigurationFile(t *testing.T) {
+	conf, err := loadFile(t, `
+output:
+  dedupe: guide-id
+inputs:
+  - name: Portugal
+    type: m3u
+    url: http://a.example/pt.m3u
+    xmltv-url: http://a.example/pt.xml
+    max-connections: 2
+  - name: Brasil
+    type: xtream
+    base-url: http://b.example
+    user: u
+    password: p
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the first input is not an Xtream account: every input is a source
+	if conf.XtreamBaseURL != "" || len(conf.Sources) != 2 {
+		t.Fatalf("xtream %q, sources %+v", conf.XtreamBaseURL, conf.Sources)
+	}
+	want := config.Source{Name: "Portugal", Type: "m3u", URL: "http://a.example/pt.m3u", XMLTVURL: "http://a.example/pt.xml", MaxConnections: 2}
+	if conf.Sources[0] != want {
+		t.Errorf("first source: %+v", conf.Sources[0])
+	}
+	if s := conf.Sources[1]; s.Type != "xtream" || s.XtreamBaseURL != "http://b.example" || s.XtreamUser != "u" {
+		t.Errorf("second source: %+v", s)
+	}
+
+	// as the only input
+	conf, err = loadFile(t, "inputs:\n  - type: m3u\n    url: /iptv/list.m3u\n", nil)
+	if err != nil || len(conf.Sources) != 1 || conf.Sources[0].URL != "/iptv/list.m3u" {
+		t.Errorf("sources %+v, err %v", conf.Sources, err)
 	}
 }
 
@@ -446,7 +484,10 @@ func TestInputsAndOutputRefused(t *testing.T) {
 		want string
 	}{
 		"a type is needed":      {"inputs:\n  - base-url: http://a.example\n    user: u\n    password: p\n", nil, "type is missing"},
-		"m3u is not there yet":  {"inputs:\n  - type: m3u\n", nil, "not supported yet"},
+		"m3u needs its url":     {"inputs:\n  - type: m3u\n", nil, "needs its url"},
+		"m3u with an account":   {"inputs:\n  - type: m3u\n    url: http://a.example/l.m3u\n    user: u\n", nil, "for an xtream input"},
+		"xtream with a url":     {one + "    url: http://a.example/l.m3u\n", nil, "for an m3u input"},
+		"passthrough":           {"inputs:\n  - type: xtream-passthrough\n", nil, "not supported yet"},
 		"an unknown type":       {"inputs:\n  - type: stalker\n", nil, "stalker"},
 		"incomplete account":    {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
 		"the same name twice":   {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},

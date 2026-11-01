@@ -54,11 +54,16 @@ type User struct {
 }
 
 // Source is an Xtream provider account the proxy serves besides the one of
-// the Xtream options.
+// the Xtream options, or an M3U playlist (Type SourceM3U).
 type Source struct {
 	// Name names the source in logs.
-	Name                                      string
+	Name string
+	// Type is SourceXtream, or SourceM3U; empty is Xtream.
+	Type                                      string
 	XtreamBaseURL, XtreamUser, XtreamPassword string
+	// URL is the playlist of an M3U source: an http(s) address or a local
+	// file. XMLTVURL is its guide, when the playlist does not name one.
+	URL, XMLTVURL string
 	// MaxConnections is how many streams the proxy opens at once on the
 	// account; 0 asks the provider.
 	MaxConnections int
@@ -66,6 +71,12 @@ type Source struct {
 	// the sources make together; nil follows the source's position.
 	BaseID *int
 }
+
+// The types of a source.
+const (
+	SourceXtream = "xtream"
+	SourceM3U    = "m3u"
+)
 
 // What the proxy delivers to its clients.
 const (

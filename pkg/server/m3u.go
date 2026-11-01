@@ -196,15 +196,7 @@ func (c *Config) m3uGuide(header string) string {
 	if c.XMLTVURL != "" {
 		return c.XMLTVURL
 	}
-	for _, name := range []string{"url-tvg", "x-tvg-url"} {
-		if value, ok := m3u.Attribute(header, name); ok {
-			// several guides may be listed: the first one is served
-			if first := strings.TrimSpace(strings.Split(value, ",")[0]); first != "" {
-				return first
-			}
-		}
-	}
-	return ""
+	return playlistGuide(header)
 }
 
 // m3uHeader is the header of the playlist clients get: when there is a

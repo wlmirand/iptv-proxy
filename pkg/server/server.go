@@ -121,6 +121,9 @@ type Config struct {
 	// are several; merge is what the proxy keeps of that catalogue.
 	sources []*source
 	merge   merging
+	// m3uInputs are the sources that are M3U playlists, by the host of their
+	// account.
+	m3uInputs map[string]*m3uInput
 	// liveAccess are the live streams users with filters may watch.
 	liveAccess liveAccess
 }
@@ -154,6 +157,9 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		m3uCache:             map[string]cachedM3U{},
 		lastGood:             newLastGood(),
 	}
+	// The M3U sources' accounts are answered in memory.
+	c.client.Transport = &inputTransport{c: c, next: c.client.Transport}
+	c.apiClient.Transport = &inputTransport{c: c, next: c.apiClient.Transport}
 	remote := ""
 	if config.RemoteURL != nil {
 		remote = config.RemoteURL.String()

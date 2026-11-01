@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	inputXtream = "xtream"
+	inputXtream = config.SourceXtream
+	inputM3U    = config.SourceM3U
 
 	dedupeGuideID = "guide-id"
 )
@@ -44,6 +45,8 @@ type fileInput struct {
 	User           string `mapstructure:"user"`
 	Password       string `mapstructure:"password"`
 	MaxConnections int    `mapstructure:"max-connections"`
+	URL            string `mapstructure:"url"`
+	XMLTVURL       string `mapstructure:"xmltv-url"`
 
 	Path           string `mapstructure:"path"`
 	Individual     bool   `mapstructure:"individual"`
@@ -194,10 +197,16 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 		switch {
 		case in.Type == "":
 			return fmt.Errorf("%s: type is missing", name)
-		case in.Type != inputXtream:
-			return fmt.Errorf("%s: type %q is not supported yet: only %s is", name, in.Type, inputXtream)
-		case in.BaseURL == "" || in.User == "" || in.Password == "":
+		case in.Type != inputXtream && in.Type != inputM3U:
+			return fmt.Errorf("%s: type %q is not supported yet: only %s and %s are", name, in.Type, inputXtream, inputM3U)
+		case in.Type == inputXtream && (in.BaseURL == "" || in.User == "" || in.Password == ""):
 			return fmt.Errorf("%s: an xtream input needs base-url, user and password", name)
+		case in.Type == inputXtream && (in.URL != "" || in.XMLTVURL != ""):
+			return fmt.Errorf("%s: url and xmltv-url are for an m3u input", name)
+		case in.Type == inputM3U && in.URL == "":
+			return fmt.Errorf("%s: an m3u input needs its url", name)
+		case in.Type == inputM3U && (in.BaseURL != "" || in.User != "" || in.Password != ""):
+			return fmt.Errorf("%s: base-url, user and password are for an xtream input", name)
 		case in.Path != "" || in.Individual || in.CategoryPrefix != "":
 			return fmt.Errorf("%s: path, individual and category-prefix are not supported yet", name)
 		case len(listed) == 1 && in.MaxConnections != 0:
@@ -208,17 +217,22 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 			return fmt.Errorf("%s: base-id cannot be negative", name)
 		}
 
-		if i > 0 {
-			sources = append(sources, config.Source{Name: name, XtreamBaseURL: in.BaseURL, XtreamUser: in.User, XtreamPassword: in.Password, MaxConnections: in.MaxConnections, BaseID: in.BaseID})
+		// The first input is the proxy's Xtream account, when it is one.
+		if i == 0 && in.Type == inputXtream {
+			conf.XtreamName = name
+			conf.XtreamBaseURL = in.BaseURL
+			conf.XtreamUser = config.CredentialString(in.User)
+			conf.XtreamPassword = config.CredentialString(in.Password)
+			conf.XtreamMaxConnections = in.MaxConnections
+			conf.XtreamBaseID = in.BaseID
 			continue
 		}
-		// The first input is the proxy's Xtream account.
-		conf.XtreamName = name
-		conf.XtreamBaseURL = in.BaseURL
-		conf.XtreamUser = config.CredentialString(in.User)
-		conf.XtreamPassword = config.CredentialString(in.Password)
-		conf.XtreamMaxConnections = in.MaxConnections
-		conf.XtreamBaseID = in.BaseID
+		sources = append(sources, config.Source{
+			Name: name, Type: in.Type,
+			XtreamBaseURL: in.BaseURL, XtreamUser: in.User, XtreamPassword: in.Password,
+			URL: in.URL, XMLTVURL: in.XMLTVURL,
+			MaxConnections: in.MaxConnections, BaseID: in.BaseID,
+		})
 	}
 	conf.Sources = sources
 	return nil

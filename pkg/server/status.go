@@ -124,8 +124,12 @@ func (c *Config) currentStatus() status {
 	// Connections are counted by source when there are several.
 	for _, src := range c.sources {
 		host := ""
-		if address, err := url.Parse(src.account.BaseURL); err == nil {
-			host = address.Host
+		address := src.account.BaseURL
+		if src.m3u != nil {
+			address = src.m3u.address
+		}
+		if parsed, err := url.Parse(address); err == nil {
+			host = parsed.Host
 		}
 		src.mu.Lock()
 		s.Sources = append(s.Sources, statusSource{Name: src.name, Host: host, Open: src.opened, Limit: src.limit})

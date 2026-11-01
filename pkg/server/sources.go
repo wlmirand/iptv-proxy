@@ -61,6 +61,8 @@ type source struct {
 	base    int64
 	baseID  *int
 	account xtream.Account
+	// m3u is the playlist of an M3U source, whose account is made up.
+	m3u *m3uInput
 	// max is the configured limit of streams at once; 0 asks the provider.
 	max int
 
@@ -149,15 +151,28 @@ func (c *Config) setupSources() error {
 		if name == "" {
 			name = fmt.Sprintf("source %d", i+1)
 		}
-		if s.XtreamBaseURL == "" || s.XtreamUser == "" || s.XtreamPassword == "" {
-			return fmt.Errorf("%s: a source needs xtream-base-url, xtream-user and xtream-password", name)
+		src := &source{name: name, max: s.MaxConnections, baseID: s.BaseID}
+		switch s.Type {
+		case "", config.SourceXtream:
+			if s.XtreamBaseURL == "" || s.XtreamUser == "" || s.XtreamPassword == "" {
+				return fmt.Errorf("%s: a source needs xtream-base-url, xtream-user and xtream-password", name)
+			}
+			src.account = xtream.Account{BaseURL: s.XtreamBaseURL, User: s.XtreamUser, Password: s.XtreamPassword}
+		case config.SourceM3U:
+			if s.URL == "" {
+				return fmt.Errorf("%s: an m3u source needs its url", name)
+			}
+			s.Name = name
+			src.m3u = newM3UInput(len(c.sources), s)
+			src.account = src.m3u.account
+			if c.m3uInputs == nil {
+				c.m3uInputs = map[string]*m3uInput{}
+			}
+			c.m3uInputs[src.m3u.host] = src.m3u
+		default:
+			return fmt.Errorf("%s: unknown source type %q", name, s.Type)
 		}
-		c.sources = append(c.sources, &source{
-			name:    name,
-			account: xtream.Account{BaseURL: s.XtreamBaseURL, User: s.XtreamUser, Password: s.XtreamPassword},
-			max:     s.MaxConnections,
-			baseID:  s.BaseID,
-		})
+		c.sources = append(c.sources, src)
 	}
 	for i, s := range c.sources {
 		s.index = i
@@ -168,6 +183,10 @@ func (c *Config) setupSources() error {
 	}
 	if err := c.checkBases(); err != nil {
 		return err
+	}
+	if len(c.sources) == 1 && c.sources[0].m3u != nil {
+		// A playlist has no get.php of its own: it is made from its lists.
+		c.XtreamGenerateApiGet = true
 	}
 	// The first source is the proxy's Xtream account.
 	first := c.sources[0].account
