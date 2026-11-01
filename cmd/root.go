@@ -58,6 +58,8 @@ var rootCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
+		fmt.Print(server.Summary())
+
 		if e := server.Serve(); e != nil {
 			log.Fatal(e)
 		}

@@ -96,6 +96,8 @@ type m3uCatalogue struct {
 	guide     string
 	// uncategorized tell that some channels, some movies have no group.
 	uncategorized, uncategorizedMovies bool
+	// what it holds, for the logs
+	channels, films, groups int
 }
 
 type movieDetails struct {
@@ -311,6 +313,9 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 			Rating: "0", Added: "0", CategoryID: categoryOf(track, &cat.uncategorizedMovies), ContainerExtension: extension,
 		})
 	}
+
+	cat.channels, cat.films = len(live), len(movies)
+	cat.groups = len(liveOrder) + len(movieOrder)
 
 	var err error
 	for _, out := range []struct {
@@ -546,4 +551,59 @@ func (c *Config) m3uInputGuide(in *m3uInput, req *http.Request) *http.Response {
 		return inMemoryBytes(req, http.StatusNotFound, "text/plain", []byte(fmt.Sprintf("%s: the guide cannot be opened", in.name)))
 	}
 	return inMemory(req, http.StatusOK, "application/xml", f, -1)
+}
+
+// preload reads the playlists of the M3U inputs, all at once, as the proxy
+// starts: the first client does not wait for them, and the log says how it
+// goes. A client that comes while they are read waits for the same reading.
+func (c *Config) preload() {
+	var inputs []*m3uInput
+	for _, src := range c.sources {
+		if src.m3u != nil {
+			inputs = append(inputs, src.m3u)
+		}
+	}
+	started := time.Now()
+	for _, in := range inputs {
+		log.Printf("[iptv-proxy] Reading %q (m3u, %s)...", in.name, hostOf(in.address))
+	}
+
+	var wg sync.WaitGroup
+	failed := 0
+	var mu sync.Mutex
+	for _, in := range inputs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			begun := time.Now()
+			cat, err := c.current(context.Background(), in, c.upstreamUserAgent(""))
+			if err != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				log.Printf("[iptv-proxy] %q failed after %s: %v: it is read again when a client asks", in.name, since(begun), err)
+				return
+			}
+			log.Printf("[iptv-proxy] %q ready: %d channels, %d movies, %d categories (%s)", in.name, cat.channels, cat.films, cat.groups, since(begun))
+		}()
+	}
+	wg.Wait()
+
+	switch {
+	case len(inputs) == 0:
+		log.Printf("[iptv-proxy] Ready")
+	case failed > 0:
+		log.Printf("[iptv-proxy] Ready, with %d of %d playlist(s) not read (%s)", failed, len(inputs), since(started))
+	default:
+		log.Printf("[iptv-proxy] Ready: %d playlist(s) read in %s", len(inputs), since(started))
+	}
+}
+
+// since is the time elapsed, rounded for a log.
+func since(t time.Time) time.Duration {
+	d := time.Since(t)
+	if d < time.Second {
+		return d.Round(time.Millisecond)
+	}
+	return d.Round(100 * time.Millisecond)
 }

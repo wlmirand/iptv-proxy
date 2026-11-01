@@ -52,6 +52,7 @@ func (c *Config) cachedPlaylist(key string, u *proxyUser, build func() (*m3u.Pla
 		return cached.body, nil
 	}
 
+	begun := time.Now()
 	playlist, err := build()
 	if err != nil {
 		if cached, ok := c.m3uCache[key]; ok {
@@ -63,6 +64,7 @@ func (c *Config) cachedPlaylist(key string, u *proxyUser, build func() (*m3u.Pla
 	}
 	_, body := c.proxify(playlist, true, u)
 	c.m3uCache[key] = cachedM3U{body: body, at: time.Now()}
+	log.Printf("[iptv-proxy] playlist of %s built: %d entries, %.1f MB (%s)", u.name, len(playlist.Tracks), float64(len(body))/(1<<20), since(begun))
 
 	return body, nil
 }

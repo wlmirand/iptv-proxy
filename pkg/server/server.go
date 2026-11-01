@@ -226,9 +226,12 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	// With an Xtream provider the playlist is asked for when a client wants
 	// it: nothing to download before starting.
 	if c.servesM3U() {
+		log.Printf("[iptv-proxy] Reading the playlist (%s)...", hostOf(c.RemoteURL.String()))
+		begun := time.Now()
 		if err := c.loadM3U(context.Background()); err != nil {
 			return nil, err
 		}
+		log.Printf("[iptv-proxy] Playlist read (%s)", since(begun))
 	}
 
 	if err := c.setupViews(); err != nil {
@@ -293,6 +296,8 @@ func (c *Config) Serve() error {
 	for _, srv := range servers {
 		go func() { stopped <- srv.ListenAndServe() }()
 	}
+	log.Printf("[iptv-proxy] Listening on %s", c.listenAddress())
+	go c.preload()
 	return <-stopped
 }
 

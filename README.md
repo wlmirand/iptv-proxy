@@ -525,8 +525,9 @@ same catalogue, ids, guide and connection limits as one, and every output
   alphabetical order of address and group keeps it and the other takes the next one
   free: only tracks that collide can be affected by a change of the
   playlist.
-- The playlist is read again after `--m3u-cache-expiration` hours. One that
-  cannot be read is kept, and asked again in five minutes.
+- The playlist is read as the proxy starts (see [The startup log](#the-startup-log)),
+  then again after `--m3u-cache-expiration` hours. One that cannot be read is
+  kept, and asked again in five minutes.
 - The guide is the `xmltv-url`, else the one the playlist names. A guide
   that cannot be read is left out of the combined guide.
 - The stream is the track's address, which only the proxy follows: players
@@ -757,6 +758,65 @@ The page refreshes itself every 10 seconds; `/status.json` gives the same
 in JSON. It changes nothing, and shows no password: stream addresses are
 masked, sources are named by their host. `iptv-proxy --version` prints the
 version.
+
+## The startup log
+
+The proxy tells what it runs with, then what it is doing while it starts. In
+Docker, it is what `docker logs <container>` shows first:
+
+```
+Using config file: /config/iptv-proxy.yaml
+iptv-proxy 4.8.0
+
+Hostname:       tv.example.com
+Listening on:   :8080
+Addresses as:   https://tv.example.com:443
+User-Agent:     VLC/3.0.20 LibVLC/3.0.20
+Playlist cache: 1 hour(s)
+Live streams:   one provider connection shared between players
+
+Users:
+  - user1
+  - user2 (2 streams at once)
+
+Inputs:
+  - Input 1 · m3u · http://provider.example (ids from 0)
+  - Famelack · m3u · https://raw.githubusercontent.com (ids from 100000000)
+
+Output:
+  Formats:            m3u, xmltv
+  Combined catalogue: yes
+  Dedupe:             none
+
+[iptv-proxy] Listening on :8080
+[iptv-proxy] Reading "Input 1" (m3u, http://provider.example)...
+[iptv-proxy] Reading "Famelack" (m3u, https://raw.githubusercontent.com)...
+[iptv-proxy] "Famelack" ready: 6227 channels, 0 movies, 222 categories (115ms)
+[iptv-proxy] "Input 1" ready: 125400 channels, 273600 movies, 103 categories (4.6s)
+[iptv-proxy] Ready: 2 playlist(s) read in 4.6s
+```
+
+- **The summary** is the settings as the proxy understood them: a quick way
+  to check a configuration file. It also lists the prefixes, the views
+  (`/portugal`), the limits and filters of the users, and the HDHomeRun
+  tuners, when there are any. `Listening on` is the port **inside** the
+  container; `Addresses as` is what the playlists write (`https`,
+  `advertised-port`).
+- **It gives no secret**: users are named, never their password; an input is
+  its scheme and host, never its path or query, where a provider's login
+  usually is; a local file is `local file`.
+- **The playlists of the `m3u` inputs are read as the proxy starts**, all at
+  once, and the log tells what each holds and how long it took. A request
+  that comes meanwhile waits for that same reading, and does not start
+  another: the first client after a restart finds the lists read, or waits
+  for what is left of the reading. `Ready` is when all of them are read.
+- **A playlist that cannot be read does not stop the proxy.** It says
+  `failed`, and `Ready, with 1 of 2 playlist(s) not read`; the playlist is
+  read again when a client asks.
+- The Xtream accounts are not asked at the start, only when a client needs
+  them. The playlist of each user is built when that user first asks, and the
+  log gives its size and time (`playlist of user1 built: 407282 entries,
+  68.2 MB (6.1s)`); it is then kept for `--m3u-cache-expiration` hours.
 
 ## When the provider fails
 
