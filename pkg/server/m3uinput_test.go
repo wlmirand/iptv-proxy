@@ -21,6 +21,8 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -442,6 +444,120 @@ func TestViewPathsAreChecked(t *testing.T) {
 		}
 		if _, err := NewServer(conf); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// moviesPlaylist is a playlist with movies, as a provider writes them, and
+// the server that has them.
+func moviesPlaylist(t *testing.T) (list string, films *httptest.Server) {
+	t.Helper()
+	films = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "film:"+r.URL.Path)
+	}))
+	t.Cleanup(films.Close)
+
+	list = t.TempDir() + "/movies.m3u"
+	content := "#EXTM3U\n" +
+		"#EXTINF:-1 group-title=\"Filmes | Action\" tvg-logo=\"http://logos.example/dh.jpg\",Die Hard\n" + films.URL + "/films/die-hard.mkv\n" +
+		"#EXTINF:-1 group-title=\"Filmes | Drama\",Titanic\n" + films.URL + "/films/titanic.mp4\n" +
+		"#EXTINF:-1,Nameless\n" + films.URL + "/films/nameless.avi\n" +
+		"#EXTINF:-1 group-title=\"TV\",Live One\n" + films.URL + "/live/one.ts\n"
+	if err := os.WriteFile(list, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return list, films
+}
+
+func TestM3UInputMovies(t *testing.T) {
+	list, _ := moviesPlaylist(t)
+	q := newProvider(t)
+	base := m3uOnly(t, q, func(c *config.ProxyConfig) { c.Sources[0].URL = list })
+
+	// movies are movies, and the live channels stay live
+	movies := listOf(t, base, "get_vod_streams", "stream_id")
+	if len(movies) != 3 {
+		t.Fatalf("movies: %s", ids(movies))
+	}
+	extensions := map[string]string{}
+	var hard string
+	for id, m := range movies {
+		extensions[fmt.Sprint(m["name"])] = fmt.Sprint(m["container_extension"])
+		if m["name"] == "Die Hard" {
+			hard = id
+		}
+		if m["stream_type"] != "movie" {
+			t.Errorf("%v is not a movie", m)
+		}
+	}
+	if extensions["Die Hard"] != "mkv" || extensions["Titanic"] != "mp4" || extensions["Nameless"] != "avi" {
+		t.Errorf("containers: %v", extensions)
+	}
+	if live := listOf(t, base, "get_live_streams", "stream_id"); len(live) != 1 {
+		t.Errorf("live channels: %s", ids(live))
+	}
+	names := map[string]bool{}
+	for _, c := range listOf(t, base, "get_vod_categories", "category_id") {
+		names[fmt.Sprint(c["category_name"])] = true
+	}
+	if !names["Filmes | Action"] || !names["Filmes | Drama"] || len(names) != 2 {
+		t.Errorf("movie categories: %v", names)
+	}
+
+	// a movie plays, and has its details
+	if resp, body := get(t, base+"/movie/me/secret/"+hard+".mkv"); resp.StatusCode != http.StatusOK || body != "film:/films/die-hard.mkv" {
+		t.Errorf("movie: status %d, %q", resp.StatusCode, body)
+	}
+	if _, body := get(t, base+"/player_api.php?"+creds+"&action=get_vod_info&vod_id="+hard); !strings.Contains(body, `"container_extension":"mkv"`) || !strings.Contains(body, "Die Hard") {
+		t.Errorf("movie details: %s", body)
+	}
+
+	// the playlist has them all, with the category they had, with no setting
+	_, playlist := get(t, base+"/iptv.m3u?"+creds)
+	for _, want := range []string{`group-title="Filmes | Action",Die Hard`, `group-title="Filmes | Drama",Titanic`, ",Nameless", `group-title="TV",Live One`, "/movie/me/secret/" + hard + ".mkv"} {
+		if !strings.Contains(playlist, want) {
+			t.Errorf("playlist lacks %q:\n%s", want, playlist)
+		}
+	}
+	if strings.Contains(playlist, "input.invalid") {
+		t.Errorf("playlist:\n%s", playlist)
+	}
+}
+
+func TestM3UInputMoviesAmongSources(t *testing.T) {
+	list, _ := moviesPlaylist(t)
+	p := newProvider(t)
+	base := proxy(t, p, func(c *config.ProxyConfig) {
+		c.Sources = []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: list, CategoryPrefix: "PT"}}
+	})
+
+	names := map[string]bool{}
+	for _, c := range listOf(t, base, "get_vod_categories", "category_id") {
+		names[fmt.Sprint(c["category_name"])] = true
+	}
+	for _, want := range []string{"PT | Filmes | Action", "PT | Filmes | Drama", "PT"} {
+		if !names[want] {
+			t.Errorf("category %q missing from %v", want, names)
+		}
+	}
+
+	// the account's movies are not in the playlist unless asked; the
+	// playlist's are
+	_, playlist := get(t, base+"/iptv.m3u?"+creds)
+	if !strings.Contains(playlist, `group-title="PT | Filmes | Action",Die Hard`) || !strings.Contains(playlist, `group-title="PT",Nameless`) {
+		t.Errorf("playlist:\n%s", playlist)
+	}
+	for id, m := range listOf(t, base, "get_vod_streams", "stream_id") {
+		if n, _ := strconv.ParseInt(id, 10, 64); n < sourceIDs && strings.Contains(playlist, fmt.Sprint(m["name"])+"\n") {
+			t.Errorf("a movie of the account is in the playlist: %v", m["name"])
+		}
+	}
+	// and they play, from the range of their source
+	for id, m := range listOf(t, base, "get_vod_streams", "stream_id") {
+		if m["name"] == "Die Hard" {
+			if resp, body := get(t, base+"/movie/me/secret/"+id+".mkv"); resp.StatusCode != http.StatusOK || body != "film:/films/die-hard.mkv" {
+				t.Errorf("movie %s: status %d, %q", id, resp.StatusCode, body)
+			}
 		}
 	}
 }

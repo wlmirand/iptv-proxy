@@ -131,12 +131,15 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 			),
 			URI: c.accountOf(ctx).StreamURL(prefix, xtream.Text(stream["stream_id"])+extension),
 		}
-	})
+	}, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if c.XtreamApiGetMovies {
+	// The movies of a playlist are in the playlist as they were in it: those
+	// of an account only when it is asked for, as there can be tens of
+	// thousands.
+	if c.XtreamApiGetMovies || c.hasPlaylist() {
 		err := c.appendCatalogue(ctx, playlist, "get_vod_categories", "get_vod_streams", func(movie map[string]any, group string) m3u.Track {
 			name := xtream.Text(movie["name"])
 			// A movie is a file: it keeps its own format, whatever format
@@ -154,6 +157,8 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 				),
 				URI: c.accountOf(ctx).StreamURL("movie/", xtream.Text(movie["stream_id"])+"."+format),
 			}
+		}, func(movie map[string]any) bool {
+			return c.XtreamApiGetMovies || c.isPlaylistEntry(xtream.Text(movie["stream_id"]))
 		})
 		if err != nil {
 			return nil, err
@@ -166,7 +171,7 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 // appendCatalogue adds to a playlist the entries of one of the provider's
 // catalogues (live streams, movies), grouped by category in the provider's
 // order.
-func (c *Config) appendCatalogue(ctx *gin.Context, playlist *m3u.Playlist, categoriesAction, entriesAction string, track func(entry map[string]any, group string) m3u.Track) error {
+func (c *Config) appendCatalogue(ctx *gin.Context, playlist *m3u.Playlist, categoriesAction, entriesAction string, track func(entry map[string]any, group string) m3u.Track, keep func(entry map[string]any) bool) error {
 	categories, err := c.providerList(ctx, categoriesAction)
 	if err != nil {
 		return err
@@ -178,6 +183,9 @@ func (c *Config) appendCatalogue(ctx *gin.Context, playlist *m3u.Playlist, categ
 
 	byCategory := map[string][]map[string]any{}
 	for _, entry := range entries {
+		if keep != nil && !keep(entry) {
+			continue
+		}
 		id := xtream.Text(entry["category_id"])
 		byCategory[id] = append(byCategory[id], entry)
 	}

@@ -59,8 +59,9 @@ import (
 // the next one that is free. Only tracks that collide are affected by a
 // change of the playlist.
 //
-// Only live channels are listed: a track with the address of a file (a
-// movie, a song) is left out, and the account has no movies or series.
+// A track with the address of a file (a movie: .mp4, .mkv...) is a movie of
+// the account, with the container its extension says; any other track is a
+// live channel. A playlist says nothing of seasons: it has no series.
 
 // m3uInputHost is the end of the made up hosts of the M3U accounts. ".invalid"
 // is reserved: such a name never resolves.
@@ -83,13 +84,22 @@ type m3uInput struct {
 
 // m3uCatalogue is what is read of a playlist, ready to be served.
 type m3uCatalogue struct {
-	categories []byte // the Xtream list, as JSON
+	categories []byte // the Xtream lists, as JSON
 	streams    []byte
+	// the same for movies
+	movieCategories []byte
+	movies          []byte
+	// details of a movie, by its id
+	details map[string]movieDetails
 	// addresses are the tracks' addresses, by stream id.
 	addresses map[string]string
 	guide     string
-	// uncategorized tells that some channels have no group.
-	uncategorized bool
+	// uncategorized tell that some channels, some movies have no group.
+	uncategorized, uncategorizedMovies bool
+}
+
+type movieDetails struct {
+	name, icon, extension string
 }
 
 func newM3UInput(position int, s config.Source) *m3uInput {
@@ -157,43 +167,60 @@ func playlistGuide(header string) string {
 	return ""
 }
 
-// liveTracks are the tracks of a playlist that are live channels, an address
-// once.
-func liveTracks(playlist *m3u.Playlist) []m3u.Track {
-	var live []m3u.Track
+// tracksOf are the tracks of a playlist that have an address, one for each
+// address: the live channels, and the movies (those whose address is a file).
+func tracksOf(playlist *m3u.Playlist) (live, movies []m3u.Track) {
 	seen := map[string]bool{}
 	for _, track := range playlist.Tracks {
 		address, err := url.Parse(track.URI)
-		if err != nil || track.URI == "" || seen[track.URI] || fileExtensions[strings.ToLower(path.Ext(address.Path))] {
+		if err != nil || track.URI == "" || seen[track.URI] {
 			continue
 		}
 		seen[track.URI] = true
-		live = append(live, track)
+		if fileExtensions[strings.ToLower(path.Ext(address.Path))] {
+			movies = append(movies, track)
+		} else {
+			live = append(live, track)
+		}
 	}
-	return live
+	return live, movies
+}
+
+type xtreamCategory struct {
+	ID       string `json:"category_id"`
+	Name     string `json:"category_name"`
+	ParentID int    `json:"parent_id"`
 }
 
 func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
-	tracks := liveTracks(playlist)
+	live, movies := tracksOf(playlist)
 
-	addresses := make([]string, len(tracks))
-	var groups []string
-	seenGroup := map[string]bool{}
-	for i, track := range tracks {
-		addresses[i] = track.URI
-		if g := track.Group(); g != "" && !seenGroup[g] {
-			seenGroup[g] = true
+	// ids are of the addresses, and of the groups: both lists are asked for
+	// separately, but a group of the same name has the same id in both
+	var addresses, groups []string
+	liveGroups, movieGroups := map[string]bool{}, map[string]bool{}
+	var liveOrder, movieOrder []string
+	for _, tracks := range [][]m3u.Track{live, movies} {
+		for _, track := range tracks {
+			addresses = append(addresses, track.URI)
+			g := track.Group()
+			if g == "" {
+				continue
+			}
 			groups = append(groups, g)
+			seen, order := &liveGroups, &liveOrder
+			if fileExtensions[strings.ToLower(path.Ext(pathOf(track.URI)))] {
+				seen, order = &movieGroups, &movieOrder
+			}
+			if !(*seen)[g] {
+				(*seen)[g] = true
+				*order = append(*order, g)
+			}
 		}
 	}
 	streamIDs := assignIDs(addresses)
 	categoryIDs := assignIDs(groups)
 
-	type category struct {
-		ID       string `json:"category_id"`
-		Name     string `json:"category_name"`
-		ParentID int    `json:"parent_id"`
-	}
 	type stream struct {
 		Num          int    `json:"num"`
 		Name         string `json:"name"`
@@ -207,42 +234,91 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 		TVArchive    int    `json:"tv_archive"`
 		DirectSource string `json:"direct_source"`
 	}
-
-	cat := &m3uCatalogue{addresses: make(map[string]string, len(tracks)), guide: playlistGuide(playlist.Header)}
-	categories := make([]category, 0, len(groups))
-	for _, g := range groups {
-		categories = append(categories, category{ID: strconv.FormatInt(categoryIDs[g], 10), Name: g})
+	type movie struct {
+		Num                int    `json:"num"`
+		Name               string `json:"name"`
+		StreamType         string `json:"stream_type"`
+		StreamID           int64  `json:"stream_id"`
+		StreamIcon         string `json:"stream_icon"`
+		Rating             string `json:"rating"`
+		Rating5            int    `json:"rating_5based"`
+		Added              string `json:"added"`
+		CategoryID         string `json:"category_id"`
+		ContainerExtension string `json:"container_extension"`
+		CustomSID          string `json:"custom_sid"`
+		DirectSource       string `json:"direct_source"`
 	}
-	streams := make([]stream, 0, len(tracks))
-	for i, track := range tracks {
-		name := track.Name()
-		if name == "" {
-			name, _ = m3u.Attribute(track.ExtInf, "tvg-name")
+
+	cat := &m3uCatalogue{addresses: make(map[string]string, len(addresses)), details: map[string]movieDetails{}, guide: playlistGuide(playlist.Header)}
+	categoriesOf := func(order []string) []xtreamCategory {
+		list := make([]xtreamCategory, 0, len(order))
+		for _, g := range order {
+			list = append(list, xtreamCategory{ID: strconv.FormatInt(categoryIDs[g], 10), Name: g})
 		}
+		return list
+	}
+	nameOf := func(track m3u.Track) string {
+		if name := track.Name(); name != "" {
+			return name
+		}
+		name, _ := m3u.Attribute(track.ExtInf, "tvg-name")
+		return name
+	}
+	categoryOf := func(track m3u.Track, uncategorized *bool) string {
+		if g := track.Group(); g != "" {
+			return strconv.FormatInt(categoryIDs[g], 10)
+		}
+		*uncategorized = true
+		return ""
+	}
+
+	streams := make([]stream, 0, len(live))
+	for i, track := range live {
 		logo, _ := m3u.Attribute(track.ExtInf, "tvg-logo")
 		guide, _ := m3u.Attribute(track.ExtInf, "tvg-id")
-		category := ""
-		if g := track.Group(); g != "" {
-			category = strconv.FormatInt(categoryIDs[g], 10)
-		} else {
-			cat.uncategorized = true
-		}
 		id := streamIDs[track.URI]
 		cat.addresses[strconv.FormatInt(id, 10)] = track.URI
 		streams = append(streams, stream{
-			Num: i + 1, Name: name, StreamType: "live", StreamID: id, StreamIcon: logo,
-			EPGChannelID: guide, Added: "0", CategoryID: category,
+			Num: i + 1, Name: nameOf(track), StreamType: "live", StreamID: id, StreamIcon: logo,
+			EPGChannelID: guide, Added: "0", CategoryID: categoryOf(track, &cat.uncategorized),
+		})
+	}
+	films := make([]movie, 0, len(movies))
+	for i, track := range movies {
+		logo, _ := m3u.Attribute(track.ExtInf, "tvg-logo")
+		extension := strings.TrimPrefix(strings.ToLower(path.Ext(pathOf(track.URI))), ".")
+		id := streamIDs[track.URI]
+		key := strconv.FormatInt(id, 10)
+		cat.addresses[key] = track.URI
+		cat.details[key] = movieDetails{name: nameOf(track), icon: logo, extension: extension}
+		films = append(films, movie{
+			Num: i + 1, Name: nameOf(track), StreamType: "movie", StreamID: id, StreamIcon: logo,
+			Rating: "0", Added: "0", CategoryID: categoryOf(track, &cat.uncategorizedMovies), ContainerExtension: extension,
 		})
 	}
 
 	var err error
-	if cat.categories, err = marshal(categories); err != nil {
-		return nil, err
-	}
-	if cat.streams, err = marshal(streams); err != nil {
-		return nil, err
+	for _, out := range []struct {
+		to *[]byte
+		v  any
+	}{
+		{&cat.categories, categoriesOf(liveOrder)}, {&cat.streams, streams},
+		{&cat.movieCategories, categoriesOf(movieOrder)}, {&cat.movies, films},
+	} {
+		if *out.to, err = marshal(out.v); err != nil {
+			return nil, err
+		}
 	}
 	return cat, nil
+}
+
+// pathOf is the path of an address, "" if it is not one.
+func pathOf(address string) string {
+	u, err := url.Parse(address)
+	if err != nil {
+		return ""
+	}
+	return u.Path
 }
 
 // marshal writes JSON the way the provider's lists are: addresses and
@@ -344,12 +420,12 @@ func (c *Config) serveM3UInput(in *m3uInput, req *http.Request) *http.Response {
 		return c.m3uInputGuide(in, req)
 	}
 
-	// "<user>/<password>/<id>" and "live/<user>/<password>/<id>": the channels
+	// "<user>/<password>/<id>", "live/..." and "movie/...": the channels, the movies
 	var id string
 	switch {
 	case len(parts) == 3:
 		id = parts[2]
-	case len(parts) == 4 && parts[0] == "live":
+	case len(parts) == 4 && (parts[0] == "live" || parts[0] == "movie"):
 		id = parts[3]
 	default:
 		return notFound()
@@ -397,10 +473,40 @@ func (c *Config) m3uInputAPI(in *m3uInput, req *http.Request) *http.Response {
 			return inMemoryBytes(req, http.StatusOK, jsonType, cat.categories)
 		}
 		return inMemoryBytes(req, http.StatusOK, jsonType, cat.streams)
+	case "get_vod_categories", "get_vod_streams":
+		cat, err := c.current(req.Context(), in, req.UserAgent())
+		if err != nil {
+			return inMemoryBytes(req, http.StatusBadGateway, "text/plain", []byte("the playlist could not be read"))
+		}
+		if action == "get_vod_categories" {
+			return inMemoryBytes(req, http.StatusOK, jsonType, cat.movieCategories)
+		}
+		return inMemoryBytes(req, http.StatusOK, jsonType, cat.movies)
+	case "get_vod_info":
+		cat, err := c.current(req.Context(), in, req.UserAgent())
+		if err != nil {
+			return inMemoryBytes(req, http.StatusBadGateway, "text/plain", []byte("the playlist could not be read"))
+		}
+		id := req.URL.Query().Get("vod_id")
+		film, ok := cat.details[id]
+		if !ok {
+			return inMemoryBytes(req, http.StatusOK, jsonType, []byte(`{"info":[],"movie_data":[]}`))
+		}
+		n, _ := strconv.ParseInt(id, 10, 64)
+		body, err := marshal(map[string]any{
+			"info": map[string]any{"name": film.name, "movie_image": film.icon},
+			"movie_data": map[string]any{
+				"stream_id": n, "name": film.name, "added": "0", "container_extension": film.extension,
+			},
+		})
+		if err != nil {
+			return inMemoryBytes(req, http.StatusInternalServerError, "text/plain", []byte("error"))
+		}
+		return inMemoryBytes(req, http.StatusOK, jsonType, body)
 	case "get_short_epg", "get_simple_data_table":
 		return inMemoryBytes(req, http.StatusOK, jsonType, []byte(`{"epg_listings":[]}`))
 	default:
-		// movies and series: a playlist has none
+		// series: a playlist has none
 		return inMemoryBytes(req, http.StatusOK, jsonType, []byte("[]"))
 	}
 }

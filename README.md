@@ -488,10 +488,18 @@ An `m3u` input is read as if it were an Xtream account, so that it has the
 same catalogue, ids, guide and connection limits as one, and every output
 (Xtream API, playlist, tuner) can come from it.
 
-- **Live channels only.** Tracks whose address is a file (a movie, a song)
-  are left out, and a playlist has no movies or series. A track repeated is
-  one channel.
+- **Live channels and movies.** A track whose address is a file (`.mp4`,
+  `.mkv`, `.avi`, `.mp3`...) is a **movie** of the input, with the container
+  its extension says; any other track is a live channel. Movies are in the
+  Xtream API (`get_vod_streams`) and in the playlist, with the category they
+  had in yours (`Filmes | Action`). Unlike the movies of an Xtream account,
+  those of a playlist are always in the playlist: they were in it to begin
+  with, and `--xtream-api-get-movies` is for accounts. A playlist says
+  nothing of seasons: it has no series, and a series' episodes are movies.
+  A track repeated is one entry. A movie's `.m3u8` address cannot be told from
+  a live channel's: it is a channel.
 - A track's **category** is its `group-title`, its guide id its `tvg-id`.
+  Movies and channels have their own lists of categories.
 - A channel's **id** comes from the track's address, so it stays when the
   playlist changes, wherever the track moves. If two addresses give the same
   id (it happens in playlists of tens of thousands of tracks), the first in
@@ -572,7 +580,7 @@ routes at all.
 | `hdhomerun` | The HDHomeRun tuners: see below. |
 
 An `xtream` output needs an Xtream account or a playlist among the inputs
-(a playlist is served as an Xtream account, with live channels only).
+(a playlist is served as an Xtream account, with its channels and its movies).
 
 A tuner is a port. Each entry has its `port`, its number of `tuners`,
 its filters (`group-regex`, `channel-regex`, `group-exclude-regex`,

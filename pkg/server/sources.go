@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -352,7 +353,7 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 		}
 
 		// What has no category is in the one of its source's name.
-		if src := c.sources[i]; cat.live && src.prefix != "" && c.hasUncategorized(ctx, src) {
+		if src := c.sources[i]; src.prefix != "" && c.hasUncategorized(ctx, src, cat) {
 			if first, ok := byName[src.prefix]; ok {
 				ids[sourceKey(i, "")] = first.shown
 				continue
@@ -386,14 +387,36 @@ func (c *Config) shownCategoryName(src *source, name string) string {
 	return src.prefix + c.Output.Separator() + name
 }
 
-// hasUncategorized tells whether a source has live channels with no category.
-// It is only known of a playlist; an Xtream account's channels all have one.
-func (c *Config) hasUncategorized(ctx *gin.Context, src *source) bool {
-	if src.m3u == nil {
+// hasUncategorized tells whether a source has live channels, or movies, with
+// no category. It is only known of a playlist; an Xtream account's entries
+// all have one.
+func (c *Config) hasUncategorized(ctx *gin.Context, src *source, of catalogue) bool {
+	if src.m3u == nil || (!of.live && of.list != "get_vod_streams") {
 		return false
 	}
 	cat, err := c.current(ctx.Request.Context(), src.m3u, c.upstreamUserAgent(ctx.Request.UserAgent()))
-	return err == nil && cat.uncategorized
+	if err != nil {
+		return false
+	}
+	if of.live {
+		return cat.uncategorized
+	}
+	return cat.uncategorizedMovies
+}
+
+// hasPlaylist tells whether one of the sources is a playlist.
+func (c *Config) hasPlaylist() bool {
+	return slices.ContainsFunc(c.sources, func(s *source) bool { return s.m3u != nil })
+}
+
+// isPlaylistEntry tells whether an entry, by its id as shown, is of a
+// playlist.
+func (c *Config) isPlaylistEntry(shown string) bool {
+	if len(c.sources) == 0 {
+		return false
+	}
+	src, _ := c.sourceOf(shown)
+	return src.m3u != nil
 }
 
 // categoryIDs returns how the categories of each source are shown, asked
