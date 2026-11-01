@@ -109,6 +109,9 @@ func applyInputsAndOutput(conf *config.ProxyConfig) error {
 			return fmt.Errorf("inputs: %w", err)
 		}
 	}
+	if conf.NoCombined && !conf.XtreamIndividual && !slices.ContainsFunc(conf.Sources, func(s config.Source) bool { return s.Individual }) {
+		return errors.New("output: combined is false and no input is individual: nothing would be served")
+	}
 	return nil
 }
 
@@ -130,13 +133,11 @@ func applyOutput(conf *config.ProxyConfig, out *fileOutput) error {
 			return fmt.Errorf("unknown format %q: formats are %s, %s and %s", f, config.OutputXtream, config.OutputM3U, config.OutputXMLTV)
 		}
 	}
-	conf.Output = &config.Output{Formats: formats}
+	conf.Output = &config.Output{Formats: formats, CategorySeparator: out.CategorySeparator}
 
 	switch {
 	case out.Combined != nil && !*out.Combined:
-		return errors.New("combined: false is not supported yet: the combined view is the only one")
-	case out.CategorySeparator != "":
-		return errors.New("category-separator is not supported yet")
+		conf.NoCombined = true
 	case out.Dedupe != "" && out.Dedupe != dedupeGuideID:
 		return fmt.Errorf("dedupe: %q is not supported yet: only %s is", out.Dedupe, dedupeGuideID)
 	}
@@ -207,8 +208,14 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 			return fmt.Errorf("%s: an m3u input needs its url", name)
 		case in.Type == inputM3U && (in.BaseURL != "" || in.User != "" || in.Password != ""):
 			return fmt.Errorf("%s: base-url, user and password are for an xtream input", name)
-		case in.Path != "" || in.Individual || in.CategoryPrefix != "":
-			return fmt.Errorf("%s: path, individual and category-prefix are not supported yet", name)
+		case in.Individual && in.Path == "":
+			return fmt.Errorf("%s: individual needs a path", name)
+		case in.Path != "" && !in.Individual:
+			return fmt.Errorf("%s: path is for an input that is individual", name)
+		case len(listed) == 1 && in.Individual:
+			return fmt.Errorf("%s: individual only counts among several inputs", name)
+		case len(listed) == 1 && in.CategoryPrefix != "":
+			return fmt.Errorf("%s: category-prefix only counts among several inputs", name)
 		case len(listed) == 1 && in.MaxConnections != 0:
 			return fmt.Errorf("%s: max-connections only counts among several inputs", name)
 		case len(listed) == 1 && in.BaseID != nil:
@@ -225,13 +232,16 @@ func applyInputs(conf *config.ProxyConfig, listed []fileInput, out *fileOutput) 
 			conf.XtreamPassword = config.CredentialString(in.Password)
 			conf.XtreamMaxConnections = in.MaxConnections
 			conf.XtreamBaseID = in.BaseID
+			conf.XtreamCategoryPrefix = in.CategoryPrefix
+			conf.XtreamPath, conf.XtreamIndividual = in.Path, in.Individual
 			continue
 		}
 		sources = append(sources, config.Source{
 			Name: name, Type: in.Type,
 			XtreamBaseURL: in.BaseURL, XtreamUser: in.User, XtreamPassword: in.Password,
 			URL: in.URL, XMLTVURL: in.XMLTVURL,
-			MaxConnections: in.MaxConnections, BaseID: in.BaseID,
+			MaxConnections: in.MaxConnections, BaseID: in.BaseID, CategoryPrefix: in.CategoryPrefix,
+			Path: in.Path, Individual: in.Individual,
 		})
 	}
 	conf.Sources = sources

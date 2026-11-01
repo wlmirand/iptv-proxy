@@ -225,3 +225,223 @@ func TestM3UInputAmongXtreamSources(t *testing.T) {
 		}
 	}
 }
+
+func categoryNames(t *testing.T, base string) map[string]string {
+	t.Helper()
+	names := map[string]string{} // by name, the id
+	for id, c := range listOf(t, base, "get_live_categories", "category_id") {
+		names[fmt.Sprint(c["category_name"])] = id
+	}
+	return names
+}
+
+func TestCategoryPrefixes(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	withPrefixes := func(separator string) func(*config.ProxyConfig) {
+		return func(c *config.ProxyConfig) {
+			c.XtreamCategoryPrefix = " BR "
+			c.Sources = []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u", CategoryPrefix: "PT"}}
+			c.Output = &config.Output{Formats: []string{config.OutputXtream, config.OutputM3U}, CategorySeparator: separator}
+		}
+	}
+
+	// without prefixes, categories of the same name are one
+	plain := proxy(t, p, func(c *config.ProxyConfig) {
+		c.Sources = []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u"}}
+	})
+	if names := categoryNames(t, plain); names["News"] == "" || len(names) != 2 {
+		t.Errorf("no prefixes: %v", names)
+	}
+
+	base := proxy(t, p, withPrefixes(""))
+	names := categoryNames(t, base)
+	for _, want := range []string{"BR | News", "BR | Sport \"HD\"", "PT | News", "PT"} {
+		if names[want] == "" {
+			t.Errorf("category %q missing from %v", want, names)
+		}
+	}
+	if names["News"] != "" {
+		t.Errorf("a category without its prefix: %v", names)
+	}
+
+	// the playlist's channels are in their categories: the group has the
+	// prefix, and what had none is in the category of the prefix alone
+	live := listOf(t, base, "get_live_streams", "stream_id")
+	for id, s := range live {
+		if n, _ := strconv.ParseInt(id, 10, 64); n < sourceIDs {
+			continue // the account's
+		}
+		name, category := fmt.Sprint(s["name"]), fmt.Sprint(s["category_id"])
+		switch {
+		case strings.HasPrefix(name, "One, the first") && category != names["PT | News"],
+			(name == "Two" || name == "Three") && category != names["PT"]:
+			t.Errorf("channel %q is in category %s, categories %v", name, category, names)
+		}
+	}
+	// a category asked for holds what it should
+	resp, body := get(t, base+"/player_api.php?"+creds+"&action=get_live_streams&category_id="+names["PT"])
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"Three"`) || strings.Contains(body, "One, the first") {
+		t.Errorf("category PT: status %d: %s", resp.StatusCode, body)
+	}
+
+	// the playlist's groups are the same
+	_, playlist := get(t, base+"/iptv.m3u?"+creds)
+	if !strings.Contains(playlist, `group-title="PT | News"`) || !strings.Contains(playlist, `group-title="PT"`) || !strings.Contains(playlist, `group-title="BR | News"`) {
+		t.Errorf("playlist:\n%s", playlist)
+	}
+
+	// the separator is the one of the settings
+	if names := categoryNames(t, proxy(t, p, withPrefixes("/"))); names["BR/News"] == "" || names["PT/News"] == "" || names["PT"] == "" {
+		t.Errorf("separator /: %v", names)
+	}
+}
+
+func TestIndividualViews(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	prefixed := func(c *config.ProxyConfig) {
+		c.XtreamPath, c.XtreamIndividual, c.XtreamCategoryPrefix = "brasil", true, "BR"
+		c.Sources = []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u", Path: "portugal", Individual: true, CategoryPrefix: "PT"}}
+	}
+	base := proxy(t, p, prefixed)
+	alone := proxy(t, p, nil)
+
+	// the account's view is the account alone, as it is
+	aloneList := listOf(t, alone, "get_live_streams", "stream_id")
+	want := ids(aloneList)
+	combined := listOf(t, base, "get_live_streams", "stream_id")
+	for id := range aloneList {
+		if combined[id] == nil {
+			t.Errorf("combined: %s lacks %s of the account alone", ids(combined), id)
+		}
+	}
+	if len(combined) <= len(aloneList) {
+		t.Errorf("combined: %s, the account alone: %s", ids(combined), want)
+	}
+	if got := ids(listOf(t, base+"/brasil", "get_live_streams", "stream_id")); got != want {
+		t.Errorf("/brasil: %s, want %s", got, want)
+	}
+	if got := categoryNames(t, base+"/brasil"); got["News"] == "" || got["BR | News"] != "" || len(got) != 2 {
+		t.Errorf("/brasil categories: %v", got)
+	}
+
+	// the playlist's view: its ids, its categories, no prefix
+	view := listOf(t, base+"/portugal", "get_live_streams", "stream_id")
+	if len(view) != 3 {
+		t.Fatalf("/portugal channels: %s", ids(view))
+	}
+	var id string
+	for k, s := range view {
+		if n, _ := strconv.ParseInt(k, 10, 64); n >= sourceIDs {
+			t.Errorf("/portugal shows %s: a range of the combined catalogue", k)
+		}
+		if strings.HasPrefix(fmt.Sprint(s["name"]), "One, the first") {
+			id = k
+		}
+	}
+	if got := categoryNames(t, base+"/portugal"); got["News"] == "" || len(got) != 1 {
+		t.Errorf("/portugal categories: %v", got)
+	}
+	if got := categoryNames(t, base); got["PT | News"] == "" || got["News"] != "" {
+		t.Errorf("combined categories: %v", got)
+	}
+
+	// it plays, at its own address
+	if resp, body := get(t, base+"/portugal/live/me/secret/"+id+".ts"); resp.StatusCode != http.StatusOK || body != "track-a" {
+		t.Errorf("/portugal stream: status %d, %q", resp.StatusCode, body)
+	}
+	resp, playlist := get(t, base+"/portugal/iptv.m3u?"+creds+"&output=ts")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(playlist, "http://proxy.example:8080/portugal/live/me/secret/"+id+".ts") ||
+		strings.Contains(playlist, "PT") || strings.Contains(playlist, "input.invalid") {
+		t.Errorf("/portugal playlist: status %d:\n%s", resp.StatusCode, playlist)
+	}
+	if resp, guide := get(t, base+"/portugal/xmltv.php?"+creds); resp.StatusCode != http.StatusOK || guide != providerGuide {
+		t.Errorf("/portugal guide: status %d", resp.StatusCode)
+	}
+
+	// a view plays what is its own: an id of another source is not there
+	other := ""
+	for k := range listOf(t, base+"/brasil", "get_live_streams", "stream_id") {
+		if _, own := view[k]; !own {
+			other = k
+			break
+		}
+	}
+	if resp, _ := get(t, base+"/portugal/live/me/secret/"+other+".ts"); resp.StatusCode < 400 {
+		t.Errorf("an id of another source plays at /portugal: status %d", resp.StatusCode)
+	}
+
+	// a user keeps their login, and a wrong one is refused
+	if resp, _ := get(t, base+"/portugal/player_api.php?username=me&password=nope"); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("wrong password: status %d", resp.StatusCode)
+	}
+}
+
+func TestOnlyViews(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	base := proxy(t, p, func(c *config.ProxyConfig) {
+		c.XtreamPath, c.XtreamIndividual, c.NoCombined = "brasil", true, true
+		c.Sources = []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u", Path: "portugal", Individual: true}}
+	})
+	for path, want := range map[string]bool{
+		"/player_api.php?" + creds:                     false,
+		"/iptv.m3u?" + creds:                           false,
+		"/brasil/player_api.php?" + creds:              true,
+		"/portugal/player_api.php?" + creds:            true,
+		"/portugal/iptv.m3u?" + creds:                  true,
+		"/live/me/secret/1.ts":                         false,
+		"/brasil/live/me/secret/1.ts":                  true,
+		"/portugal/xmltv.php?" + creds:                 true,
+		"/brasil/player_api.php?username=x&password=y": false,
+	} {
+		got := codeOf(t, base, path)
+		if (got != http.StatusNotFound && got != http.StatusUnauthorized) != want {
+			t.Errorf("%s: status %d, served: %v", path, got, want)
+		}
+	}
+}
+
+func TestViewsShareWhatIsTheAccounts(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	conf := &config.ProxyConfig{
+		HostConfig: &config.HostConfiguration{Hostname: "proxy.example", Port: 8080}, XtreamBaseURL: p.URL,
+		XtreamUser: xUser, XtreamPassword: xPass, User: user, Password: pass, M3UFileName: "iptv.m3u", M3UCacheExpiration: 1,
+		XtreamPath: "brasil", XtreamIndividual: true,
+		Sources: []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u"}},
+	}
+	c, err := NewServer(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.views) != 1 {
+		t.Fatalf("%d views", len(c.views))
+	}
+	v := c.views[0]
+	if v.sources[0].usage != c.sources[0].usage || v.hub != c.hub || v.users[0].slots != c.users[0].slots {
+		t.Error("a view does not share the connections of the combined catalogue")
+	}
+	if v.sources[0].base != 0 || v.users[0].provider != c.sources[0].account || v.CustomEndpoint != "brasil" {
+		t.Errorf("view: base %d, account %v, endpoint %q", v.sources[0].base, v.users[0].provider, v.CustomEndpoint)
+	}
+}
+
+func TestViewPathsAreChecked(t *testing.T) {
+	p, q := newProvider(t), newProvider(t)
+	for name, c := range map[string]struct{ first, second string }{
+		"a user's name":   {"me", "pt"},
+		"a proxy path":    {"live", "pt"},
+		"the same twice":  {"br", "br"},
+		"not an address":  {"b r", "pt"},
+		"the playlist's":  {"iptv.m3u", "pt"},
+		"the status page": {"status", "pt"},
+	} {
+		conf := &config.ProxyConfig{
+			HostConfig: &config.HostConfiguration{Hostname: "proxy.example", Port: 8080}, XtreamBaseURL: p.URL,
+			XtreamUser: xUser, XtreamPassword: xPass, User: user, Password: pass, M3UFileName: "iptv.m3u", M3UCacheExpiration: 1,
+			XtreamPath: c.first, XtreamIndividual: true,
+			Sources: []config.Source{{Name: "portugal", Type: config.SourceM3U, URL: q.URL + "/list.m3u", Path: c.second, Individual: true}},
+		}
+		if _, err := NewServer(conf); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

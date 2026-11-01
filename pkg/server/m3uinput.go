@@ -88,6 +88,8 @@ type m3uCatalogue struct {
 	// addresses are the tracks' addresses, by stream id.
 	addresses map[string]string
 	guide     string
+	// uncategorized tells that some channels have no group.
+	uncategorized bool
 }
 
 func newM3UInput(position int, s config.Source) *m3uInput {
@@ -222,6 +224,8 @@ func newM3UCatalogue(playlist *m3u.Playlist) (*m3uCatalogue, error) {
 		category := ""
 		if g := track.Group(); g != "" {
 			category = strconv.FormatInt(categoryIDs[g], 10)
+		} else {
+			cat.uncategorized = true
 		}
 		id := streamIDs[track.URI]
 		cat.addresses[strconv.FormatInt(id, 10)] = track.URI

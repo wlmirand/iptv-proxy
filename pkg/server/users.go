@@ -45,7 +45,8 @@ type proxyUser struct {
 	rules *filter.Rules
 	// provider is the provider account the user's requests are made with.
 	provider xtream.Account
-	slots    slots
+	// slots are shared by the copies of the user in the sources' views.
+	slots *slots
 }
 
 // reservedNames are the first elements of the proxy's own paths: a user
@@ -82,6 +83,7 @@ func (c *Config) setupUsers() error {
 			max:      account.MaxConnections,
 			rules:    filter.Combine(c.rules, own),
 			provider: c.providerAccount(),
+			slots:    &slots{},
 		}
 		c.users = append(c.users, u)
 		c.usersByName[account.Name] = u

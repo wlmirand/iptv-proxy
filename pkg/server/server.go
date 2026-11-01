@@ -124,6 +124,10 @@ type Config struct {
 	// m3uInputs are the sources that are M3U playlists, by the host of their
 	// account.
 	m3uInputs map[string]*m3uInput
+	// views serve a source each, on its own; view tells that this Config is
+	// one of them.
+	views []*Config
+	view  bool
 	// liveAccess are the live streams users with filters may watch.
 	liveAccess liveAccess
 }
@@ -223,6 +227,10 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		}
 	}
 
+	if err := c.setupViews(); err != nil {
+		return nil, err
+	}
+
 	return c, nil
 }
 
@@ -243,6 +251,9 @@ func (c *Config) Handler() http.Handler {
 	router := gin.New()
 	router.Use(gin.LoggerWithFormatter(c.accessLog), gin.Recovery(), cors.Default())
 	c.routes(router.Group("/"))
+	for _, v := range c.views {
+		v.routes(router.Group("/"))
+	}
 	return router
 }
 

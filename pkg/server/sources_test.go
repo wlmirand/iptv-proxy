@@ -222,7 +222,7 @@ func TestSourceLimit(t *testing.T) {
 	p := newProvider(t)
 	c := &Config{ProxyConfig: &config.ProxyConfig{}}
 	c.apiClient = http.DefaultClient
-	src := &source{name: "a", account: xtream.Account{BaseURL: p.URL, User: xUser, Password: xPass}}
+	src := &source{name: "a", account: xtream.Account{BaseURL: p.URL, User: xUser, Password: xPass}, usage: &usage{}}
 	for range 3 {
 		if n := c.sourceLimit(t.Context(), src); n != 2 {
 			t.Errorf("limit %d, want the account's 2", n)
@@ -231,7 +231,7 @@ func TestSourceLimit(t *testing.T) {
 	if n := p.count("/player_api.php"); n != 1 {
 		t.Errorf("the account was asked %d times", n)
 	}
-	unknown := &source{name: "b", asked: true, opened: 3}
+	unknown := &source{name: "b", usage: &usage{asked: true, opened: 3}}
 	if c.sourceFull(t.Context(), unknown) {
 		t.Error("a source with no known limit is full")
 	}

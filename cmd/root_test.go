@@ -397,8 +397,13 @@ inputs:
     user: v
     password: q
     base-id: 200000000
+    category-prefix: " PT "
+    individual: true
+    path: portugal
 output:
   dedupe: guide-id
+  combined: false
+  category-separator: " - "
   formats: [xtream, m3u, xmltv, m3u]
   hdhomerun:
     - port: 5004
@@ -418,7 +423,13 @@ output:
 	if got.BaseID == nil || *got.BaseID != 200000000 || conf.XtreamBaseID != nil {
 		t.Errorf("base ids: %v, %v", got.BaseID, conf.XtreamBaseID)
 	}
-	got.BaseID = nil
+	if got.CategoryPrefix != " PT " || conf.Output.Separator() != " - " {
+		t.Errorf("prefix %q, separator %q", got.CategoryPrefix, conf.Output.Separator())
+	}
+	if !got.Individual || got.Path != "portugal" || !conf.NoCombined {
+		t.Errorf("individual %v, path %q, no combined %v", got.Individual, got.Path, conf.NoCombined)
+	}
+	got.BaseID, got.CategoryPrefix, got.Individual, got.Path = nil, "", false, ""
 	if got != (config.Source{Name: "Portugal", Type: "xtream", XtreamBaseURL: "http://b.example", XtreamUser: "v", XtreamPassword: "q"}) {
 		t.Errorf("sources: %+v", conf.Sources)
 	}
@@ -491,10 +502,12 @@ func TestInputsAndOutputRefused(t *testing.T) {
 		"an unknown type":       {"inputs:\n  - type: stalker\n", nil, "stalker"},
 		"incomplete account":    {"inputs:\n  - type: xtream\n    base-url: http://a.example\n", nil, "needs base-url, user and password"},
 		"the same name twice":   {"output:\n  dedupe: guide-id\n" + two + "    name: input 1\n", nil, "used twice"},
-		"not yet: individual":   {one + "    individual: true\n", nil, "not supported yet"},
+		"individual no path":    {"output:\n  dedupe: guide-id\n" + two + "    individual: true\n", nil, "needs a path"},
+		"path alone":            {"output:\n  dedupe: guide-id\n" + two + "    path: br\n", nil, "path is for"},
+		"individual alone":      {one + "    individual: true\n    path: br\n", nil, "several inputs"},
 		"base-id alone":         {one + "    base-id: 0\n", nil, "several inputs"},
 		"negative base-id":      {"output:\n  dedupe: guide-id\n" + two + "    base-id: -1\n", nil, "negative"},
-		"not yet: prefix":       {one + "    category-prefix: BR\n", nil, "not supported yet"},
+		"prefix alone":          {one + "    category-prefix: BR\n", nil, "several inputs"},
 		"max alone":             {one + "    max-connections: 1\n", nil, "several inputs"},
 		"several need a dedupe": {two, nil, "output.dedupe"},
 		"dedupe none":           {one + "output:\n  dedupe: none\n", nil, "not supported yet"},
@@ -502,8 +515,7 @@ func TestInputsAndOutputRefused(t *testing.T) {
 		"an old m3u option":     {one, map[string]string{"M3U_URL": "http://z.example/x.m3u"}, "no inputs"},
 		"old sources":           {one + "sources:\n  - xtream-base-url: http://b.example\n", nil, "no inputs"},
 		"unknown format":        {"output:\n  formats: [hls]\n", nil, "unknown format"},
-		"not combined":          {"output:\n  combined: false\n", nil, "not supported yet"},
-		"a separator":           {"output:\n  category-separator: ' - '\n", nil, "not supported yet"},
+		"nothing served":        {"output:\n  combined: false\n", nil, "nothing would be served"},
 		"a tuner with no port":  {"output:\n  hdhomerun:\n    - tuners: 2\n", nil, "port"},
 		"two tuners":            {"output:\n  hdhomerun:\n    - port: 5004\n    - port: 5005\n", nil, "one tuner"},
 		"tuner sources":         {"output:\n  hdhomerun:\n    - port: 5004\n      sources: [a]\n", nil, "not supported yet"},

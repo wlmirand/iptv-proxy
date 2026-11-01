@@ -127,6 +127,7 @@ func (c *Config) passthroughUser(ctx *gin.Context, name, password string) (*prox
 			max:      allowed,
 			rules:    c.rules,
 			provider: account,
+			slots:    &slots{},
 		}
 	}
 	a.checked = time.Now()

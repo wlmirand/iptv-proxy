@@ -39,6 +39,11 @@ func (c *Config) routes(r *gin.RouterGroup) {
 		r.GET("/status.json", c.statusAuth, c.statusJSON)
 	}
 
+	// The sources' own views are served on their own (see setupViews).
+	if c.NoCombined {
+		return
+	}
+
 	// Xtream service endpoints
 	if c.XtreamBaseURL != "" {
 		c.xtreamRoutes(r)

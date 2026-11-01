@@ -64,6 +64,13 @@ type Source struct {
 	// URL is the playlist of an M3U source: an http(s) address or a local
 	// file. XMLTVURL is its guide, when the playlist does not name one.
 	URL, XMLTVURL string
+	// Path is where the source's own view is served ("/<path>/..."), when
+	// Individual says so: its channels alone, as they are.
+	Path       string
+	Individual bool
+	// CategoryPrefix is put in front of the source's categories in the
+	// combined catalogue, with the Output's separator.
+	CategoryPrefix string
 	// MaxConnections is how many streams the proxy opens at once on the
 	// account; 0 asks the provider.
 	MaxConnections int
@@ -93,6 +100,21 @@ const (
 // The HDHomeRun tuner is chosen by its own options.
 type Output struct {
 	Formats []string
+	// CategorySeparator goes between a source's category prefix and the
+	// category; empty is DefaultCategorySeparator.
+	CategorySeparator string
+}
+
+// DefaultCategorySeparator is the separator between a category prefix and a
+// category.
+const DefaultCategorySeparator = " | "
+
+// Separator is the string between a category prefix and a category.
+func (o *Output) Separator() string {
+	if o == nil || o.CategorySeparator == "" {
+		return DefaultCategorySeparator
+	}
+	return o.CategorySeparator
 }
 
 // Has tells whether the proxy delivers a format. Without an Output, it
@@ -121,6 +143,12 @@ type ProxyConfig struct {
 	XtreamName           string
 	XtreamMaxConnections int
 	XtreamBaseID         *int
+	XtreamCategoryPrefix string
+	XtreamPath           string
+	XtreamIndividual     bool
+	// NoCombined leaves out the combined catalogue: only the sources'
+	// own views are served.
+	NoCombined           bool
 	XtreamGenerateApiGet bool
 	// XtreamApiGetMovies adds the provider's movies to the playlist generated
 	// from its API. Off by default: a catalogue of tens of thousands of

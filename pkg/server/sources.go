@@ -61,11 +61,22 @@ type source struct {
 	base    int64
 	baseID  *int
 	account xtream.Account
+	// prefix goes in front of the source's categories in the combined
+	// catalogue.
+	prefix string
 	// m3u is the playlist of an M3U source, whose account is made up.
 	m3u *m3uInput
 	// max is the configured limit of streams at once; 0 asks the provider.
 	max int
+	// path is where the source's own view is served, when individual.
+	path       string
+	individual bool
 
+	// usage is shared with the source's view: it is one account.
+	*usage
+}
+
+type usage struct {
 	mu     sync.Mutex
 	limit  int // 0: no limit
 	asked  bool
@@ -144,14 +155,14 @@ func (c *Config) setupSources() error {
 		if name == "" {
 			name = "xtream"
 		}
-		c.sources = append(c.sources, &source{name: name, account: c.providerAccount(), max: c.XtreamMaxConnections, baseID: c.XtreamBaseID})
+		c.sources = append(c.sources, &source{name: name, account: c.providerAccount(), max: c.XtreamMaxConnections, baseID: c.XtreamBaseID, prefix: strings.TrimSpace(c.XtreamCategoryPrefix), path: c.XtreamPath, individual: c.XtreamIndividual, usage: &usage{}})
 	}
 	for i, s := range c.Sources {
 		name := s.Name
 		if name == "" {
 			name = fmt.Sprintf("source %d", i+1)
 		}
-		src := &source{name: name, max: s.MaxConnections, baseID: s.BaseID}
+		src := &source{name: name, max: s.MaxConnections, baseID: s.BaseID, prefix: strings.TrimSpace(s.CategoryPrefix), path: s.Path, individual: s.Individual, usage: &usage{}}
 		switch s.Type {
 		case "", config.SourceXtream:
 			if s.XtreamBaseURL == "" || s.XtreamUser == "" || s.XtreamPassword == "" {
@@ -213,7 +224,7 @@ func (c *Config) checkBases() error {
 
 // merged tells whether several sources are served as one.
 func (c *Config) merged() bool {
-	return len(c.sources) > 1
+	return len(c.sources) > 1 || c.view
 }
 
 // shownID is the id an entry of a source is shown under, given the source's
@@ -307,7 +318,8 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 			continue
 		}
 		err := xtream.EachEntry(body, func(entry map[string]any, raw []byte) error {
-			id, name := xtream.Text(entry["category_id"]), xtream.Text(entry["category_name"])
+			id, own := xtream.Text(entry["category_id"]), xtream.Text(entry["category_name"])
+			name := c.shownCategoryName(c.sources[i], own)
 			if first, ok := byName[name]; ok && first.src != i {
 				ids[sourceKey(i, id)] = first.shown
 				return nil
@@ -317,9 +329,16 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 				byName[name] = firstOf{i, shown}
 			}
 			ids[sourceKey(i, id)] = shown
+			values := map[string]any{}
 			if shown != id {
+				values["category_id"] = xtream.SameType(entry["category_id"], shown)
+			}
+			if name != own {
+				values["category_name"] = name
+			}
+			if len(values) > 0 {
 				var err error
-				if raw, err = xtream.ReplaceFields(raw, map[string]any{"category_id": xtream.SameType(entry["category_id"], shown)}); err != nil {
+				if raw, err = xtream.ReplaceFields(raw, values); err != nil {
 					return err
 				}
 			}
@@ -330,6 +349,20 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 			log.Printf("[iptv-proxy] %s: %s: %v", cat.categories, c.sources[i].name, err)
 			partial = true
 		}
+
+		// What has no category is in the one of its source's name.
+		if src := c.sources[i]; cat.live && src.prefix != "" && c.hasUncategorized(ctx, src) {
+			if first, ok := byName[src.prefix]; ok {
+				ids[sourceKey(i, "")] = first.shown
+				continue
+			}
+			shown := shownID(src.base, strconv.Itoa(sourceIDs-1))
+			byName[src.prefix] = firstOf{i, shown}
+			ids[sourceKey(i, "")] = shown
+			if raw, err := marshal(map[string]any{"category_id": shown, "category_name": src.prefix, "parent_id": 0}); err == nil {
+				out.add(raw)
+			}
+		}
 	}
 	if !partial {
 		c.merge.mu.Lock()
@@ -337,6 +370,29 @@ func (c *Config) mergedCategories(ctx *gin.Context, cat catalogue) ([]byte, map[
 		c.merge.mu.Unlock()
 	}
 	return out.list(), ids, partial, nil
+}
+
+// shownCategoryName is the name a category is shown under: the source's
+// prefix, then the separator, then the name; the prefix alone for what has no
+// category.
+func (c *Config) shownCategoryName(src *source, name string) string {
+	switch {
+	case src.prefix == "":
+		return name
+	case name == "":
+		return src.prefix
+	}
+	return src.prefix + c.Output.Separator() + name
+}
+
+// hasUncategorized tells whether a source has live channels with no category.
+// It is only known of a playlist; an Xtream account's channels all have one.
+func (c *Config) hasUncategorized(ctx *gin.Context, src *source) bool {
+	if src.m3u == nil {
+		return false
+	}
+	cat, err := c.current(ctx.Request.Context(), src.m3u, c.upstreamUserAgent(ctx.Request.UserAgent()))
+	return err == nil && cat.uncategorized
 }
 
 // categoryIDs returns how the categories of each source are shown, asked
