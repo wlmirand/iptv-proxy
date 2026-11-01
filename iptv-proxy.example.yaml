@@ -46,6 +46,10 @@ users:
 # Inputs: what the proxy reads
 # ---------------------------------------------------------------------------
 
+# With several inputs, the playlist is built from their catalogues: an
+# Xtream account's series are not in it. To have everything of an account's
+# own get.php, list its address as an m3u input instead:
+#   url: http://provider.example/get.php?username=u&password=p&type=m3u_plus&output=ts
 inputs:
   # An Xtream Codes account.
   - name: Brazil

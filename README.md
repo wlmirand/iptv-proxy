@@ -470,14 +470,32 @@ the playlist alone.
 | `base-url`, `user`, `password` | The Xtream Codes account (`xtream` inputs). |
 | `url` | The playlist: an `http(s)` address or a local file (`m3u` inputs). |
 | `xmltv-url` | The guide of an `m3u` input, when its playlist does not name one (`url-tvg`). |
-| `max-connections` | Streams the proxy opens at once on the input; the account's own limit by default (none known for a playlist). |
+| `max-connections` | Streams the proxy holds at once on the input: an input at its limit is tried last for a channel other inputs have too. The account's own limit by default (none is known for a playlist: set it). |
 | `base-id` | Where the input's ids start in the combined catalogue. See [Ids](#ids). |
 | `category-prefix` | Put in front of the input's categories in the combined catalogue. See [Categories](#categories). |
 | `individual`, `path` | Also serve the input alone at `/<path>/` (`individual: true` needs a `path`). See [An input on its own](#an-input-on-its-own). |
 
-With a **single input**, nothing is rewritten and the answers are the
-provider's own: `base-id`, `category-prefix`, `max-connections` and
-`individual` mean nothing then, and the proxy refuses them.
+With a **single input**, nothing is rewritten: an Xtream account's answers,
+and its `get.php` playlist (channels, movies **and series**, with the
+`type` and `output` you give it), are the provider's own. `base-id`,
+`category-prefix`, `max-connections` and `individual` mean nothing then, and
+the proxy refuses them.
+
+With **several inputs**, the playlist is built from their catalogues, not
+taken from a provider: it has the live channels, the movies of the playlists
+and, with `--xtream-api-get-movies`, those of the Xtream accounts. **An
+Xtream account's series are not in it**, and `type=m3u_plus` is not needed
+(the playlist always has the attributes): only `output=ts` matters, which
+gives the addresses the extension `.ts`. If you want everything an account's
+own `get.php` has, give that address as an `m3u` input:
+
+```yaml
+inputs:
+  - name: My provider
+    type: m3u
+    url: "http://provider.example/get.php?username=u&password=p&type=m3u_plus&output=ts"
+    xmltv-url: "http://provider.example/xmltv.php?username=u&password=p"
+```
 
 Inputs replace `--m3u-url`, `--xtream-*`, `--xtream-passthrough` and
 `sources`: they do not go together, and the proxy says so at startup.
@@ -496,14 +514,15 @@ same catalogue, ids, guide and connection limits as one, and every output
   those of a playlist are always in the playlist: they were in it to begin
   with, and `--xtream-api-get-movies` is for accounts. A playlist says
   nothing of seasons: it has no series, and a series' episodes are movies.
-  An address in two groups is two entries, one in each category; the same address in the same group is one. A movie's `.m3u8` address cannot be told from
-  a live channel's: it is a channel.
+  An address in two groups is two entries, one in each category; the same
+  address in the same group is one. A movie's `.m3u8` address cannot be told
+  from a live channel's: it is a channel.
 - A track's **category** is its `group-title`, its guide id its `tvg-id`.
   Movies and channels have their own lists of categories.
 - A channel's **id** comes from the track's address, so it stays when the
   playlist changes, wherever the track moves. If two addresses give the same
   id (it happens in playlists of tens of thousands of tracks), the first in
-  alphabetical order of address keeps it and the other takes the next one
+  alphabetical order of address and group keeps it and the other takes the next one
   free: only tracks that collide can be affected by a change of the
   playlist.
 - The playlist is read again after `--m3u-cache-expiration` hours. One that
@@ -512,6 +531,12 @@ same catalogue, ids, guide and connection limits as one, and every output
   that cannot be read is left out of the combined guide.
 - The stream is the track's address, which only the proxy follows: players
   never see it.
+- **A big playlist takes memory.** The proxy keeps a playlist read, and the
+  lists made from it. Plan on about 1 GB at the peak of a first read for a
+  playlist of 400,000 entries (60-80 MB), and some seconds, besides the time
+  the provider takes to send it. The next requests are answered from what is
+  kept.
+- `--xtream-passthrough` is not an input: it keeps its own options.
 
 ### Ids
 
@@ -552,8 +577,9 @@ With `individual: true` and a `path`, an input is also served alone,
 under its path: `/portugal/iptv.m3u`, `/portugal/player_api.php`,
 `/portugal/xmltv.php` and its streams at `/portugal/live/<user>/<password>/<id>`.
 
-- It shows the input's channels **as they are**: its own ids and categories,
-  no prefix, no range.
+- It shows the input's channels with **its own ids and categories**: no
+  prefix, no range. Its playlist is built from the input's catalogue, as the
+  combined one is: an Xtream account's series are not in it either.
 - It is the same proxy: the same users and passwords, the same filters, and the
   connections are shared with the combined catalogue and with the other
   views. A stream watched in one is the same one in the other, and the limit of
